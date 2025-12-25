@@ -14,7 +14,7 @@ class TimeDatePlugin(plugins.Plugin):
 
     def __init__(self):
         self.ready = False
-        self.position = (0, 110)  # default X, Y
+        self.position = (0, 92)  # default X, Y
         self.format = "%H:%M %d-%m"  # 24h + day-month
 
     def on_loaded(self):
