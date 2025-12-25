@@ -1,0 +1,1545 @@
+"""
+Bluetooth Tether Helper Plugin for Pwnagotchi
+
+Required System Packages:
+    sudo apt-get update
+    sudo apt-get install -y bluez network-manager
+
+Setup:
+1. Install packages: sudo apt-get install -y bluez network-manager
+2. Enable services:
+   sudo systemctl enable bluetooth && sudo systemctl start bluetooth
+   sudo systemctl enable NetworkManager && sudo systemctl start NetworkManager
+3. Configure plugin in config.toml with phone MAC address
+4. Access web UI at http://<pwnagotchi-ip>:8080/plugins/bt-tether-helper
+"""
+
+import subprocess
+import threading
+import time
+import logging
+import os
+from pwnagotchi.plugins import Plugin
+from flask import render_template_string, request, jsonify
+import pwnagotchi.ui.fonts as fonts
+from pwnagotchi.ui.components import LabeledValue
+from pwnagotchi.ui.view import BLACK
+
+
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html>
+  <head>
+    <title>Bluetooth Tether</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background: #f5f5f5; }
+      .card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+      h2 { margin: 0 0 20px 0; color: #333; }
+      input { padding: 10px; font-size: 14px; border: 1px solid #ddd; border-radius: 4px; text-transform: uppercase; }
+      button { padding: 10px 20px; background: #0066cc; color: white; border: none; cursor: pointer; font-size: 14px; border-radius: 4px; margin-right: 8px; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; }
+      button:hover { background: #0052a3; }
+      button.danger { background: #dc3545; }
+      button.danger:hover { background: #c82333; }
+      button.success { background: #28a745; }
+      button.success:hover { background: #218838; }
+      button:disabled { background: #ccc; cursor: not-allowed; }
+      .status-item { padding: 8px; margin: 4px 0; border-radius: 4px; background: #f8f9fa; }
+      .status-good { background: #d4edda; color: #155724; }
+      .status-bad { background: #f8d7da; color: #721c24; }
+      .device-item { padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+      .device-item:hover { background: #f0f8ff; border-color: #0066cc; }
+      .message-box { padding: 12px; border-radius: 4px; margin: 12px 0; }
+      .message-info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+      .message-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+      .message-warning { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
+      .message-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+      .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #f3f3f3; 
+                 border-top: 2px solid #0066cc; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
+      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+      .mac-editor { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .mac-editor input { flex: 1; min-width: 200px; }
+      .mac-editor button { white-space: nowrap; }
+      @media (max-width: 600px) {
+        .mac-editor { flex-direction: column; align-items: stretch; }
+        .mac-editor input { width: 100%; }
+        .mac-editor button { width: 100%; margin: 0 !important; }
+      }
+    </style>
+  </head>
+  <body>
+    <h2>🔷 Bluetooth Tether</h2>
+    
+    <!-- Phone Connection & Status -->
+    <div class="card" id="phoneConnectionCard" style="display: none;">
+      <h3 style="margin: 0 0 12px 0;">📱 Phone Connection</h3>
+      <div style="background: #f5f5f5; padding: 12px; border-radius: 4px; margin-bottom: 12px; border: 1px solid #ddd;">
+        <div style="color: #666; font-size: 12px; margin-bottom: 4px;">Configured MAC address:</div>
+        <div style="font-family: monospace; font-size: 14px; color: #333;">{{ mac if mac else 'Not configured' }}</div>
+        <small style="color: #666; display: block; margin-top: 4px;">Set in config.toml: <code style="background: white; padding: 2px 6px; border-radius: 3px;">main.plugins.bt-tether-helper.mac</code></small>
+      </div>
+      
+      <!-- Hidden input for JavaScript to access MAC value -->
+      <input type="hidden" id="macInput" value="{{ mac }}" />
+      
+      <div id="connectActions">
+        <button class="success" onclick="quickConnect()" id="quickConnectBtn" style="width: 100%; margin: 0 0 8px 0;">
+          ⚡ Connect to Phone
+        </button>
+        <div id="disconnectSection" style="display: none;">
+          <label style="display: flex; align-items: center; gap: 8px; padding: 8px; background: #fff3cd; border-radius: 4px; cursor: pointer; margin-bottom: 8px;">
+            <input type="checkbox" id="unpairCheckbox" style="width: auto; margin: 0;" />
+            <span style="color: #856404; font-size: 13px;">Also unpair device (requires passkey on next connection)</span>
+          </label>
+          <button class="danger" onclick="disconnectDevice()" id="disconnectBtn" style="width: 100%; margin: 0 0 12px 0;">
+            🔌 Disconnect
+          </button>
+        </div>
+      </div>
+      <small style="color: #666; display: block; margin-bottom: 12px;">Click Connect for first-time pairing. Pairing dialog will appear on your phone. Disconnect blocks device to prevent auto-reconnect.</small>
+      
+      <!-- Pairing Feedback -->
+      <div id="pairingFeedback" style="display: none; margin-bottom: 12px;">
+        <div id="pairingMessage" class="message-box message-info">
+          <div id="pairingText">Ready to pair</div>
+        </div>
+      </div>
+      
+      <!-- Connection Status -->
+      <div style="border-top: 1px solid #ddd; padding-top: 12px;">
+        <h4 style="margin: 0 0 8px 0; color: #666; font-size: 14px;">📊 Status</h4>
+        <div id="connectionStatus">
+          <div class="status-item" id="statusPaired">📱 Paired: <span>Checking...</span></div>
+          <div class="status-item" id="statusTrusted">🔐 Trusted: <span>Checking...</span></div>
+          <div class="status-item" id="statusConnected">🔵 Connected: <span>Checking...</span></div>
+          <div class="status-item" id="statusInternet">🌐 Internet: <span>Checking...</span></div>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Scan for Devices -->
+    <div class="card" id="scanCard">
+      <h3 style="margin: 0 0 12px 0;">🔍 Scan for Devices</h3>
+      <div id="setupInstructions" style="background: #e7f3ff; padding: 12px; border-radius: 4px; margin-bottom: 12px; border-left: 4px solid #0066cc;">
+        <p style="margin: 0 0 8px 0; font-weight: bold;">First-time setup:</p>
+        <ol style="margin: 0; padding-left: 20px; line-height: 1.6;">
+          <li>Make sure your phone's Bluetooth is ON</li>
+          <li>Click "Scan" below to discover devices</li>
+          <li>Find your phone in the list and click 📋 Copy MAC</li>
+          <li>Open <code style="background: white; padding: 2px 6px; border-radius: 3px;">/etc/pwnagotchi/config.toml</code></li>
+          <li>Add: <code style="background: white; padding: 2px 6px; border-radius: 3px;">main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"</code></li>
+          <li>Restart Pwnagotchi to apply changes</li>
+        </ol>
+      </div>
+      <button class="success" onclick="scanDevices()" id="scanBtn" style="width: 100%; margin: 0;">
+        🔍 Scan
+      </button>
+      
+      <!-- Discovered Devices List -->
+      <div id="scanResults" style="margin-top: 16px; display: none;">
+        <h4 style="margin: 0 0 8px 0;">Discovered Devices:</h4>
+        <div id="scanStatus" style="color: #666; margin: 8px 0;">Scanning...</div>
+        <div id="deviceList"></div>
+      </div>
+    </div>
+    
+    <script>
+      const macInput = document.getElementById("macInput");
+      let statusInterval = null;
+
+      // Update card visibility and status on page load
+      updateCardVisibility();
+      if (macInput.value && /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(macInput.value)) {
+        checkConnectionStatus();
+      }
+      
+      function updateCardVisibility() {
+        const hasMac = macInput.value && /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(macInput.value);
+        // Always show scan card, just toggle which instructions to show
+        const setupInstructions = document.getElementById('setupInstructions');
+        if (setupInstructions) {
+          setupInstructions.style.display = hasMac ? 'none' : 'block';
+        }
+        document.getElementById('phoneConnectionCard').style.display = hasMac ? 'block' : 'none';
+      }
+
+      async function checkConnectionStatus() {
+        const mac = macInput.value.trim();
+        if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(mac)) return;
+        
+        try {
+          const response = await fetch(`/plugins/bt-tether-helper/connection-status?mac=${encodeURIComponent(mac)}`);
+          const data = await response.json();
+          
+          // Determine screen status letter (C/N/P/D)
+          let screenStatus = 'D';
+          if (data.pan_active) {
+            screenStatus = 'C';  // Connected with internet
+          } else if (data.connected) {
+            screenStatus = 'N';  // Connected but no internet
+          } else if (data.paired) {
+            screenStatus = 'P';  // Paired but not connected
+          }
+          
+          document.getElementById("statusPaired").innerHTML = 
+            `📱 <b style="color: ${data.paired ? '#28a745' : '#6c757d'};">[P]</b> Paired: <b style="color: ${data.paired ? '#28a745' : '#dc3545'};">${data.paired ? '✓ Yes' : '✗ No'}</b>`;
+          document.getElementById("statusPaired").className = data.paired ? 'status-item status-good' : 'status-item status-bad';
+          
+          document.getElementById("statusTrusted").innerHTML = 
+            `🔐 <b style="color: ${data.trusted ? '#28a745' : '#6c757d'};">[T]</b> Trusted: <b style="color: ${data.trusted ? '#28a745' : '#dc3545'};">${data.trusted ? '✓ Yes' : '✗ No'}</b>`;
+          document.getElementById("statusTrusted").className = data.trusted ? 'status-item status-good' : 'status-item status-bad';
+          
+          document.getElementById("statusConnected").innerHTML = 
+            `🔵 <b style="color: ${data.connected ? '#28a745' : '#6c757d'};">[C]</b> Connected: <b style="color: ${data.connected ? '#28a745' : '#dc3545'};">${data.connected ? '✓ Yes' : '✗ No'}</b>`;
+          document.getElementById("statusConnected").className = data.connected ? 'status-item status-good' : 'status-item status-bad';
+          
+          document.getElementById("statusInternet").innerHTML = 
+            `🌐 <b style="color: ${data.pan_active ? '#28a745' : '#6c757d'};">[I]</b> Internet: <b style="color: ${data.pan_active ? '#28a745' : '#dc3545'};">${data.pan_active ? '✓ Active' : '✗ Not Active'}</b>${data.interface ? ` (${data.interface})` : ''}`;
+          document.getElementById("statusInternet").className = data.pan_active ? 'status-item status-good' : 'status-item status-bad';
+          
+          // Show/hide connect/disconnect buttons based on connection status
+          const connectBtn = document.getElementById('quickConnectBtn');
+          const disconnectSection = document.getElementById('disconnectSection');
+          if (data.connected) {
+            connectBtn.style.display = 'none';
+            disconnectSection.style.display = 'block';
+          } else {
+            connectBtn.style.display = 'block';
+            disconnectSection.style.display = 'none';
+          }
+          
+          // Display passkey prominently if available (only during pairing)
+          if (data.passkey && !data.paired) {
+            showFeedback(
+              'PASSKEY: ' + data.passkey + '\\n\\nVerify this matches on your phone, then tap PAIR!',
+              "warning"
+            );
+          } else if (data.paired && data.connected) {
+            // Hide passkey message once fully connected
+            const pairingFeedback = document.getElementById('pairingFeedback');
+            const pairingText = document.getElementById('pairingText');
+            if (pairingText.innerHTML.includes('PASSKEY:')) {
+              pairingFeedback.style.display = 'none';
+            }
+            
+            // Stop polling when fully connected to save resources
+            if (data.pan_active) {
+              console.log('Fully connected - stopping status polling');
+              stopStatusPolling();
+            }
+          }
+          
+        } catch (error) {
+          console.error('Status check failed:', error);
+        }
+      }
+
+      function startStatusPolling() {
+        if (statusInterval) clearInterval(statusInterval);
+        statusInterval = setInterval(checkConnectionStatus, 2000);
+      }
+
+      function stopStatusPolling() {
+        if (statusInterval) {
+          clearInterval(statusInterval);
+          statusInterval = null;
+        }
+      }
+
+      async function quickConnect() {
+        const mac = macInput.value.trim();
+        if (!mac || !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(mac)) {
+          showFeedback("Please enter your phone's MAC address first!", "warning");
+          return;
+        }
+
+        const quickConnectBtn = document.getElementById('quickConnectBtn');
+        quickConnectBtn.disabled = true;
+        quickConnectBtn.innerHTML = '<span class="spinner"></span> Connecting...';
+        
+        showFeedback("Connecting to phone... Watch for pairing dialog!", "info");
+        
+        try {
+          const response = await fetch(`/plugins/bt-tether-helper/connect?mac=${encodeURIComponent(mac)}`, { method: 'GET' });
+          const data = await response.json();
+          
+          if (data.success) {
+            showFeedback("Connection started! Check your phone for the pairing dialog.", "success");
+            startStatusPolling();
+          } else {
+            showFeedback("Connection failed: " + data.message, "error");
+          }
+        } catch (error) {
+          showFeedback("Connection failed: " + error.message, "error");
+        } finally {
+          quickConnectBtn.disabled = false;
+          quickConnectBtn.innerHTML = '⚡ Connect to Phone';
+        }
+      }
+
+      async function scanDevices() {
+        const scanBtn = document.getElementById('scanBtn');
+        const scanResults = document.getElementById('scanResults');
+        const scanStatus = document.getElementById('scanStatus');
+        const deviceList = document.getElementById('deviceList');
+        
+        scanBtn.disabled = true;
+        scanBtn.innerHTML = '<span class="spinner"></span> Scanning...';
+        scanResults.style.display = 'block';
+        deviceList.innerHTML = '';
+        scanStatus.innerHTML = '<span class="spinner"></span> Scanning for devices... (30 seconds)';
+        
+        showFeedback("Scanning for devices... Keep phone Bluetooth settings open!", "info");
+        
+        try {
+          const response = await fetch('/plugins/bt-tether-helper/scan', { method: 'GET' });
+          const data = await response.json();
+          
+          if (data.devices && data.devices.length > 0) {
+            // Show all discovered devices with copy buttons
+            scanStatus.textContent = `Found ${data.devices.length} device(s):`;
+            deviceList.innerHTML = '';
+            data.devices.forEach(device => {
+              const div = document.createElement('div');
+              div.className = 'device-item';
+              div.innerHTML = `
+                <div>
+                  <b>${device.name}</b><br>
+                  <small style="color: #666;">${device.mac}</small>
+                </div>
+                <button onclick="copyMacToClipboard('${device.mac}'); return false;" style="margin: 0;">📋 Copy MAC</button>
+              `;
+              deviceList.appendChild(div);
+            });
+            showFeedback(`Found ${data.devices.length} device(s). Copy MAC to add to config.toml`, "success");
+          } else {
+            scanStatus.textContent = 'No devices found';
+            showFeedback("No devices found. Make sure phone Bluetooth is ON.", "warning");
+          }
+        } catch (error) {
+          scanStatus.textContent = 'Scan failed';
+          showFeedback("Scan failed: " + error.message, "error");
+        } finally {
+          scanBtn.disabled = false;
+          scanBtn.innerHTML = '🔍 Scan';
+        }
+      }
+
+      function copyMacToClipboard(mac) {
+        navigator.clipboard.writeText(mac).then(() => {
+          showFeedback(`MAC address copied: ${mac}\n\nAdd this to your config.toml:\nmain.plugins.bt-tether-helper.mac = "${mac}"`, "success");
+        }).catch(err => {
+          // Fallback for older browsers
+          const textArea = document.createElement('textarea');
+          textArea.value = mac;
+          document.body.appendChild(textArea);
+          textArea.select();
+          try {
+            document.execCommand('copy');
+            showFeedback(`MAC address copied: ${mac}\n\nAdd this to your config.toml:\nmain.plugins.bt-tether-helper.mac = "${mac}"`, "success");
+          } catch (err) {
+            showFeedback(`Failed to copy. MAC: ${mac}`, "error");
+          }
+          document.body.removeChild(textArea);
+        });
+      }
+
+      async function disconnectDevice() {
+        const mac = macInput.value.trim();
+        if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(mac)) {
+          showFeedback("Enter a valid MAC address first", "warning");
+          return;
+        }
+        
+        const unpairCheckbox = document.getElementById('unpairCheckbox');
+        const shouldUnpair = unpairCheckbox.checked;
+        const disconnectBtn = document.getElementById('disconnectBtn');
+        
+        disconnectBtn.disabled = true;
+        disconnectBtn.innerHTML = '<span class="spinner"></span> Disconnecting...';
+        
+        showFeedback(shouldUnpair ? "Disconnecting and unpairing device..." : "Disconnecting from device...", "info");
+        
+        try {
+          const response = await fetch(`/plugins/bt-tether-helper/disconnect?mac=${encodeURIComponent(mac)}`, { method: 'GET' });
+          const data = await response.json();
+          
+          if (data.success) {
+            // If unpair checkbox is checked, also unpair
+            if (shouldUnpair) {
+              const unpairResponse = await fetch(`/plugins/bt-tether-helper/unpair?mac=${encodeURIComponent(mac)}`, { method: 'GET' });
+              const unpairData = await unpairResponse.json();
+              if (unpairData.success) {
+                showFeedback("Device disconnected and unpaired. Passkey required for next connection.", "success");
+              } else {
+                showFeedback("Disconnected but unpair failed: " + unpairData.message, "warning");
+              }
+            } else {
+              showFeedback("Device disconnected and blocked. Phone will see connection drop automatically.", "success");
+            }
+            stopStatusPolling();
+            checkConnectionStatus();
+            // Restart polling after disconnect to update status
+            startStatusPolling();
+          } else {
+            showFeedback(data.message || "Disconnect failed", "error");
+          }
+        } catch (error) {
+          showFeedback("Disconnect failed: " + error.message, "error");
+        } finally {
+          disconnectBtn.disabled = false;
+          disconnectBtn.innerHTML = '🔌 Disconnect';
+        }
+      }
+
+      function showFeedback(message, type = "info") {
+        const pairingFeedback = document.getElementById('pairingFeedback');
+        const pairingMessage = document.getElementById('pairingMessage');
+        const pairingText = document.getElementById('pairingText');
+        
+        pairingFeedback.style.display = 'block';
+        pairingMessage.className = 'message-box message-' + type;
+        
+        // For passkey messages, make them stand out with larger font
+        if (message.includes('PASSKEY:')) {
+          pairingText.innerHTML = message.replace(/PASSKEY: (\d{6})/, 
+            '<b style="font-size: 24px; display: block; margin: 10px 0;">🔑 PASSKEY: $1</b>');
+        } else {
+          pairingText.textContent = message;
+        }
+        
+        // Auto-hide success messages after 5 seconds
+        if (type === 'success') {
+          setTimeout(() => {
+            if (pairingText.textContent === message || pairingText.innerHTML.includes(message)) {
+              pairingFeedback.style.display = 'none';
+            }
+          }, 5000);
+        }
+      }
+    </script>
+  </body>
+</html>
+"""
+
+
+class BTTetherHelper(Plugin):
+    __author__ = "wsvdmeer"
+    __version__ = "1.0.0"
+    __license__ = "GPL3"
+    __description__ = "Guided Bluetooth tethering with user instructions"
+
+    def on_loaded(self):
+        self.phone_mac = self.options.get("mac", "")
+        self._status = "IDLE"
+        self._message = "Ready"
+        self.lock = threading.Lock()
+        self.options["csrf_exempt"] = True  # Disable CSRF for this plugin
+        self.agent_process = None  # Track agent process
+        self.agent_log_fd = None  # File descriptor for agent log
+        self.agent_log_path = None  # Path to agent log file
+        self.current_passkey = None  # Store passkey for display in UI
+        self.ui_position = self.options.get(
+            "position", None
+        )  # Screen position for status (None = auto top-right)
+        self.show_on_screen = self.options.get(
+            "show_on_screen", True
+        )  # Enable/disable screen display
+
+        # Cache for status to avoid excessive bluetoothctl polling
+        self._status_cache = None
+        self._status_cache_time = 0
+        self._status_cache_ttl = 30  # Cache status for 30 seconds
+
+        # Lock to prevent multiple bluetoothctl commands from running simultaneously
+        self._bluetoothctl_lock = threading.Lock()
+
+        # Flag to indicate when connection/pairing is in progress
+        self._connection_in_progress = False
+
+        # Kill any lingering bluetoothctl processes to prevent deadlocks
+        try:
+            subprocess.run(
+                ["pkill", "-9", "bluetoothctl"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            logging.info(
+                "[bt-tether-helper] Cleaned up lingering bluetoothctl processes"
+            )
+        except:
+            pass
+
+        # Restart bluetooth service to ensure clean state
+        try:
+            logging.info("[bt-tether-helper] Restarting Bluetooth service...")
+            subprocess.run(
+                ["systemctl", "restart", "bluetooth"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            )
+            time.sleep(2)  # Give service time to start
+            logging.info("[bt-tether-helper] Bluetooth service restarted")
+        except Exception as e:
+            logging.warning(
+                f"[bt-tether-helper] Failed to restart Bluetooth service: {e}"
+            )
+
+        # DON'T start persistent agent - it blocks other bluetoothctl commands
+        # Agent will be started temporarily only during pairing
+        logging.info("[bt-tether-helper] Loaded (agent will start only during pairing)")
+
+    @property
+    def status(self):
+        return self._status
+
+    @status.setter
+    def status(self, value):
+        self._status = value
+
+    @property
+    def message(self):
+        return self._message
+
+    @message.setter
+    def message(self, value):
+        self._message = value
+
+    def on_ui_setup(self, ui):
+        """Setup UI elements to display Bluetooth status on screen"""
+        if self.show_on_screen:
+            # If position not specified, place in top-right of screen
+            pos = self.ui_position if self.ui_position else (ui.width() / 2 + 50, 0)
+            ui.add_element(
+                "bt-status",
+                LabeledValue(
+                    color=BLACK,
+                    label="BT",
+                    value="D",
+                    position=pos,
+                    label_font=fonts.Bold,
+                    text_font=fonts.Medium,
+                ),
+            )
+
+    def on_ui_update(self, ui):
+        """Update Bluetooth status on screen"""
+        if not self.show_on_screen or not self.phone_mac:
+            return
+
+        try:
+            # Get current connection status
+            status = self._get_full_connection_status(self.phone_mac)
+
+            # Determine display value based on status
+            # C = Connected (internet), N = No internet, P = Paired, D = Disconnected
+            if status.get("pan_active", False):
+                display = "C"  # Connected with internet
+            elif status.get("connected", False):
+                display = "N"  # Connected but no internet
+            elif status.get("paired", False):
+                display = "P"  # Paired but not connected
+            else:
+                display = "D"  # Disconnected
+
+            ui.set("bt-status", display)
+        except Exception as e:
+            # Log error but don't crash
+            logging.debug(f"[bt-tether-helper] UI update error: {e}")
+            # Set to unknown state if error occurs
+            try:
+                ui.set("bt-status", "?")
+            except:
+                pass
+
+    def on_webhook(self, path, request):
+        try:
+            # Normalize path by stripping leading slash
+            clean_path = path.lstrip("/") if path else ""
+
+            if not clean_path:
+                with self.lock:
+                    return render_template_string(
+                        HTML_TEMPLATE,
+                        mac=self.phone_mac,
+                        status=self.status,
+                        message=self.message,
+                    )
+
+            if clean_path == "connect":
+                mac = request.args.get("mac", "").strip().upper()
+                if mac and self._validate_mac(mac):
+                    with self.lock:
+                        self.phone_mac = mac
+                        self.options["mac"] = self.phone_mac
+                    self.start_connection()
+                    return jsonify({"success": True, "message": "Connection started"})
+                else:
+                    return jsonify({"success": False, "message": "Invalid MAC"})
+
+            if clean_path == "status":
+                with self.lock:
+                    return jsonify(
+                        {
+                            "status": self.status,
+                            "message": self.message,
+                            "mac": self.phone_mac,
+                        }
+                    )
+
+            if clean_path == "disconnect":
+                mac = request.args.get("mac", "").strip().upper()
+                if mac and self._validate_mac(mac):
+                    result = self._disconnect_device(mac)
+                    return jsonify(result)
+                else:
+                    return jsonify({"success": False, "message": "Invalid MAC"})
+
+            if clean_path == "unpair":
+                mac = request.args.get("mac", "").strip().upper()
+                if mac and self._validate_mac(mac):
+                    result = self._unpair_device(mac)
+                    return jsonify(result)
+                else:
+                    return jsonify({"success": False, "message": "Invalid MAC"})
+
+            if clean_path == "pair-status":
+                mac = request.args.get("mac", "").strip().upper()
+                if mac and self._validate_mac(mac):
+                    status = self._check_pair_status(mac)
+                    return jsonify(status)
+                else:
+                    return jsonify({"paired": False, "connected": False})
+
+            if clean_path == "scan":
+                devices = self._scan_devices()
+                return jsonify({"devices": devices})
+
+            if clean_path == "connection-status":
+                mac = request.args.get("mac", "").strip().upper()
+                if mac and self._validate_mac(mac):
+                    status = self._get_full_connection_status(mac)
+                    return jsonify(status)
+                else:
+                    return jsonify(
+                        {
+                            "paired": False,
+                            "trusted": False,
+                            "connected": False,
+                            "pan_active": False,
+                        }
+                    )
+
+            return "Not Found", 404
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Webhook error: {e}")
+            return "Error", 500
+
+    def _validate_mac(self, mac):
+        """Validate MAC address format"""
+        import re
+
+        return bool(re.match(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$", mac))
+
+    def _disconnect_device(self, mac):
+        """Disconnect from a Bluetooth device and remove trust to prevent auto-reconnect"""
+        try:
+            # Invalidate status cache to get fresh status after disconnect
+            self._invalidate_status_cache()
+
+            logging.info(f"[bt-tether-helper] Disconnecting from device {mac}...")
+
+            # FIRST: Block the device immediately to prevent reconnection attempts
+            logging.info(
+                f"[bt-tether-helper] Blocking device first to prevent reconnection..."
+            )
+            block_result = self._run_cmd(["bluetoothctl", "block", mac], capture=True)
+            logging.info(f"[bt-tether-helper] Block result: {block_result}")
+            time.sleep(1)
+
+            # Remove trust to prevent automatic reconnection
+            logging.info(
+                f"[bt-tether-helper] Removing trust to prevent auto-reconnect..."
+            )
+            trust_result = self._run_cmd(["bluetoothctl", "untrust", mac], capture=True)
+            logging.info(f"[bt-tether-helper] Untrust result: {trust_result}")
+            time.sleep(1)
+
+            # Disconnect NAP profile via DBus if connected
+            try:
+                import dbus
+
+                bus = dbus.SystemBus()
+                manager = dbus.Interface(
+                    bus.get_object("org.bluez", "/"),
+                    "org.freedesktop.DBus.ObjectManager",
+                )
+                objects = manager.GetManagedObjects()
+                device_path = None
+                for path, interfaces in objects.items():
+                    if "org.bluez.Device1" in interfaces:
+                        props = interfaces["org.bluez.Device1"]
+                        if props.get("Address") == mac:
+                            device_path = path
+                            break
+
+                if device_path:
+                    NAP_UUID = "00001116-0000-1000-8000-00805f9b34fb"
+                    device = dbus.Interface(
+                        bus.get_object("org.bluez", device_path), "org.bluez.Device1"
+                    )
+                    try:
+                        logging.info(f"[bt-tether-helper] Disconnecting NAP profile...")
+                        device.DisconnectProfile(NAP_UUID)
+                        time.sleep(1)
+                        logging.info(f"[bt-tether-helper] NAP profile disconnected")
+                    except Exception as e:
+                        logging.debug(f"[bt-tether-helper] NAP disconnect: {e}")
+            except Exception as e:
+                logging.debug(f"[bt-tether-helper] DBus operation: {e}")
+
+            # Disconnect the Bluetooth connection
+            result = self._run_cmd(["bluetoothctl", "disconnect", mac], capture=True)
+            logging.info(f"[bt-tether-helper] Disconnect result: {result}")
+            time.sleep(2)
+
+            # Skip status verification since device is already blocked (bluetoothctl info hangs on blocked devices)
+            logging.info(
+                f"[bt-tether-helper] Device {mac} blocked and disconnected successfully"
+            )
+
+            # Return success without querying blocked device
+            final_status = {"connected": False, "paired": False}
+            logging.info(
+                f"[bt-tether-helper] Final status - Connected: {final_status['connected']}, Paired: {final_status['paired']}"
+            )
+
+            return {
+                "success": True,
+                "message": f"Device {mac} disconnected and blocked",
+            }
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Disconnect error: {e}")
+            return {"success": False, "message": f"Disconnect failed: {str(e)}"}
+
+    def _unpair_device(self, mac):
+        """Unpair a Bluetooth device"""
+        try:
+            logging.info(f"[bt-tether-helper] Unpairing device {mac}...")
+            result = self._run_cmd(["bluetoothctl", "remove", mac], capture=True)
+            if result and "Device has been removed" in result:
+                logging.info(f"[bt-tether-helper] Device {mac} unpaired successfully")
+                return {
+                    "success": True,
+                    "message": f"Device {mac} unpaired successfully",
+                }
+            elif result and "not available" in result:
+                return {"success": True, "message": f"Device {mac} was not paired"}
+            else:
+                logging.warning(f"[bt-tether-helper] Unpair result: {result}")
+                return {"success": True, "message": f"Unpair command sent: {result}"}
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Unpair error: {e}")
+            return {"success": False, "message": f"Unpair failed: {str(e)}"}
+
+    def _check_pair_status(self, mac):
+        """Check if a device is already paired"""
+        try:
+            info = self._run_cmd(["bluetoothctl", "info", mac], capture=True)
+            if not info or "Device" not in info:
+                return {"paired": False, "connected": False}
+
+            paired = "Paired: yes" in info
+            connected = "Connected: yes" in info
+
+            logging.debug(
+                f"[bt-tether-helper] Device {mac} - Paired: {paired}, Connected: {connected}"
+            )
+            return {"paired": paired, "connected": connected}
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Pair status check error: {e}")
+            return {"paired": False, "connected": False}
+
+    def _invalidate_status_cache(self):
+        """Invalidate the status cache to force fresh status check"""
+        self._status_cache = None
+        self._status_cache_time = 0
+
+    def _get_full_connection_status(self, mac):
+        """Get complete connection status including trusted and PAN interface (with caching)"""
+        try:
+            # If connection/pairing is in progress, return cached status to avoid blocking
+            if self._connection_in_progress:
+                if self._status_cache:
+                    return self._status_cache
+                # Return default "connecting" status if no cache yet
+                return {
+                    "paired": False,
+                    "trusted": False,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                }
+
+            # Use cached status if still fresh (< 30 seconds old)
+            current_time = time.time()
+            if (
+                self._status_cache
+                and (current_time - self._status_cache_time) < self._status_cache_ttl
+            ):
+                return self._status_cache
+
+            # First check if device is blocked (bluetoothctl info hangs on blocked devices)
+            # Use shorter timeout (5s) for this check since it sometimes hangs
+            devices_output = self._run_cmd(
+                ["bluetoothctl", "devices", "Blocked"], capture=True, timeout=5
+            )
+
+            # If blocked check times out or returns timeout, skip it and try info directly
+            if devices_output and devices_output != "Timeout" and mac in devices_output:
+                logging.debug(
+                    f"[bt-tether-helper] Device {mac} is blocked, returning disconnected status"
+                )
+                status = {
+                    "paired": False,
+                    "trusted": False,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                }
+                # Cache the result
+                self._status_cache = status
+                self._status_cache_time = current_time
+                return status
+
+            # Try to get device info (with 10s timeout)
+            info = self._run_cmd(
+                ["bluetoothctl", "info", mac], capture=True, timeout=10
+            )
+
+            # If info command timed out, return disconnected status
+            if info == "Timeout":
+                logging.warning(
+                    f"[bt-tether-helper] Device info query timed out, returning disconnected status"
+                )
+                status = {
+                    "paired": False,
+                    "trusted": False,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                }
+                # Cache the result
+                self._status_cache = status
+                self._status_cache_time = current_time
+                return status
+
+            if not info or "Device" not in info:
+                status = {
+                    "paired": False,
+                    "trusted": False,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                }
+                # Cache the result
+                self._status_cache = status
+                self._status_cache_time = current_time
+                return status
+
+            paired = "Paired: yes" in info
+            trusted = "Trusted: yes" in info
+            connected = "Connected: yes" in info
+            pan_active = self._pan_active()
+            interface = self._get_pan_interface() if pan_active else None
+
+            # Only log at debug level to reduce spam
+            logging.debug(
+                f"[bt-tether-helper] Full status - Paired: {paired}, Trusted: {trusted}, Connected: {connected}, PAN: {pan_active}, Interface: {interface}"
+            )
+            status = {
+                "paired": paired,
+                "trusted": trusted,
+                "connected": connected,
+                "pan_active": pan_active,
+                "interface": interface,
+                "passkey": self.current_passkey,
+            }
+
+            # Cache the result
+            self._status_cache = status
+            self._status_cache_time = current_time
+            return status
+
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Connection status check error: {e}")
+            status = {
+                "paired": False,
+                "trusted": False,
+                "connected": False,
+                "pan_active": False,
+                "interface": None,
+            }
+            # Cache error result too to avoid rapid retries
+            self._status_cache = status
+            self._status_cache_time = current_time
+            return status
+
+    def _scan_devices(self):
+        """Scan for Bluetooth devices and return list with MACs and names"""
+        try:
+            logging.info("[bt-tether-helper] Starting device scan...")
+
+            # Power on bluetooth
+            self._run_cmd(["bluetoothctl", "power", "on"], capture=True)
+            time.sleep(1)
+
+            # Start scanning
+            logging.info("[bt-tether-helper] Starting scan...")
+            self._run_cmd(["bluetoothctl", "scan", "on"], capture=False)
+
+            # Scan for 30 seconds
+            time.sleep(30)
+
+            # Get devices
+            devices_output = self._run_cmd(["bluetoothctl", "devices"], capture=True)
+
+            # Stop scanning
+            self._run_cmd(["bluetoothctl", "scan", "off"])
+
+            devices = []
+            if devices_output:
+                for line in devices_output.split("\n"):
+                    if line.strip() and line.startswith("Device"):
+                        parts = line.strip().split(" ", 2)
+                        if len(parts) >= 2:
+                            mac = parts[1]
+                            name = parts[2] if len(parts) > 2 else "Unknown Device"
+                            devices.append({"mac": mac, "name": name})
+                            logging.info(
+                                f"[bt-tether-helper] Scan found: {name} ({mac})"
+                            )
+
+            logging.info(
+                f"[bt-tether-helper] Scan complete. Found {len(devices)} devices"
+            )
+            return devices
+
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Scan error: {e}")
+            return []
+
+    def start_connection(self):
+        with self.lock:
+            if not self.phone_mac:
+                self.status = "ERROR"
+                self.message = "No MAC address set"
+                return
+
+            if self.status in ["PAIRING", "CONNECTING"]:
+                self.message = "Connection already in progress"
+                return
+
+        # Invalidate status cache to get fresh status during connection
+        self._invalidate_status_cache()
+        self._connection_in_progress = True
+        threading.Thread(target=self._connect_thread, daemon=True).start()
+
+    def _connect_thread(self):
+        """Full automatic connection thread with pairing and connection logic"""
+        try:
+            mac = self.phone_mac
+            logging.info(f"[bt-tether-helper] Starting connection to {mac}...")
+
+            # Check if Bluetooth is responsive, restart if needed
+            if not self._restart_bluetooth_if_needed():
+                logging.error(
+                    "[bt-tether-helper] Bluetooth service is unresponsive and couldn't be restarted"
+                )
+                with self.lock:
+                    self.status = "ERROR"
+                    self.message = "Bluetooth service unresponsive. Try: sudo systemctl restart bluetooth"
+                return
+
+            # Unblock device if it was blocked during previous disconnect
+            logging.info(
+                f"[bt-tether-helper] Unblocking device in case it was blocked..."
+            )
+            with self.lock:
+                self.message = "Unblocking device..."
+            self._run_cmd(["bluetoothctl", "unblock", mac], capture=True)
+            time.sleep(1)
+
+            # Check if already paired
+            with self.lock:
+                self.message = "Checking pairing status..."
+            pair_status = self._check_pair_status(mac)
+
+            if not pair_status["paired"]:
+                logging.info(
+                    f"[bt-tether-helper] Device not paired. Starting pairing process..."
+                )
+                with self.lock:
+                    self.status = "PAIRING"
+                    self.message = "Device not paired. Starting pairing process..."
+
+                # Attempt pairing - this will show dialog on phone
+                if not self._pair_device_interactive(mac):
+                    logging.error(f"[bt-tether-helper] Pairing failed!")
+                    with self.lock:
+                        self.status = "ERROR"
+                        self.message = (
+                            "Pairing failed. Did you accept the dialog on your phone?"
+                        )
+                    return
+
+                logging.info(f"[bt-tether-helper] Pairing successful!")
+            else:
+                logging.info(f"[bt-tether-helper] Device already paired")
+                with self.lock:
+                    self.message = "Device already paired ✓"
+
+            # Trust the device
+            logging.info(f"[bt-tether-helper] Trusting device...")
+            with self.lock:
+                self.message = "Setting device as trusted..."
+            self._run_cmd(["bluetoothctl", "trust", mac])
+            time.sleep(1)
+
+            # Connect to device
+            with self.lock:
+                self.status = "CONNECTING"
+                self.message = "Connecting to device via Bluetooth..."
+
+            logging.info(f"[bt-tether-helper] Connecting to device...")
+            connect_result = self._run_cmd(
+                ["bluetoothctl", "connect", mac], capture=True
+            )
+            logging.info(f"[bt-tether-helper] Connect result: {connect_result}")
+
+            # Wait for connection to establish
+            with self.lock:
+                self.message = "Waiting for connection to establish..."
+            time.sleep(3)
+
+            # Check connection status
+            with self.lock:
+                self.message = "Verifying Bluetooth connection..."
+            status = self._check_pair_status(mac)
+            if not status["connected"]:
+                logging.warning(
+                    f"[bt-tether-helper] Device not connected after connect command"
+                )
+                with self.lock:
+                    self.status = "ERROR"
+                    self.message = "Connection failed. Check if Bluetooth tethering is enabled on phone."
+                return
+
+            logging.info(f"[bt-tether-helper] Device connected!")
+            with self.lock:
+                self.message = "Bluetooth connected ✓ Setting up internet..."
+
+            # Try to establish PAN connection
+            logging.info(f"[bt-tether-helper] Establishing PAN connection...")
+            with self.lock:
+                self.status = "CONNECTING"
+                self.message = "Connecting to NAP profile for internet..."
+
+            # Try DBus connection to NAP profile
+            if self._connect_nap_dbus(mac):
+                logging.info(f"[bt-tether-helper] NAP connection successful!")
+                with self.lock:
+                    self.message = "NAP connected ✓ Checking for network interface..."
+                time.sleep(2)
+
+                # Check if PAN interface is up
+                if self._pan_active():
+                    iface = self._get_pan_interface()
+                    logging.info(f"[bt-tether-helper] ✓ PAN interface active: {iface}")
+                    with self.lock:
+                        self.status = "CONNECTED"
+                        self.message = f"✓ Connected! Internet via {iface}"
+                else:
+                    logging.warning(
+                        f"[bt-tether-helper] NAP connected but no interface detected"
+                    )
+                    with self.lock:
+                        self.status = "CONNECTED"
+                        self.message = "Connected but no internet. Enable Bluetooth tethering on phone."
+            else:
+                logging.warning(f"[bt-tether-helper] NAP connection failed")
+                with self.lock:
+                    self.status = "CONNECTED"
+                    self.message = "Bluetooth connected but tethering failed. Enable tethering on phone."
+
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Connection thread error: {e}")
+            import traceback
+
+            logging.error(f"[bt-tether-helper] Traceback: {traceback.format_exc()}")
+            with self.lock:
+                self.status = "ERROR"
+                self.message = f"Connection error: {str(e)}"
+        finally:
+            # Always clear the flag when connection completes (success or failure)
+            self._connection_in_progress = False
+            self._invalidate_status_cache()  # Force fresh status after connection
+
+    def _strip_ansi_codes(self, text):
+        """Remove ANSI color/control codes from text"""
+        if not text:
+            return text
+        import re
+
+        # Remove ANSI escape sequences
+        ansi_escape = re.compile(r"\x1b\[[0-9;]*[mGKHF]|\x01|\x02")
+        text = ansi_escape.sub("", text)
+
+        # Filter out bluetoothctl status lines ([CHG], [DEL], [NEW]) to prevent log parser errors
+        # These cause pwnagotchi's log parser to throw errors like "time data 'CHG' does not match format"
+        lines = text.split("\n")
+        filtered_lines = []
+        for line in lines:
+            # Skip lines that start with bluetoothctl status markers
+            stripped = line.strip()
+            if not (
+                stripped.startswith("[CHG]")
+                or stripped.startswith("[DEL]")
+                or stripped.startswith("[NEW]")
+            ):
+                filtered_lines.append(line)
+
+        return "\n".join(filtered_lines)
+
+    def _check_bluetooth_responsive(self):
+        """Quick check if bluetoothctl is responsive"""
+        try:
+            result = subprocess.run(
+                ["bluetoothctl", "show"],
+                capture_output=True,
+                timeout=3,  # Short timeout for health check
+                text=True,
+            )
+            return result.returncode == 0
+        except:
+            return False
+
+    def _restart_bluetooth_if_needed(self):
+        """Restart Bluetooth service if it's unresponsive"""
+        if not self._check_bluetooth_responsive():
+            logging.warning(
+                "[bt-tether-helper] Bluetooth appears hung, restarting service..."
+            )
+            try:
+                subprocess.run(
+                    ["pkill", "-9", "bluetoothctl"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                )
+                subprocess.run(
+                    ["systemctl", "restart", "bluetooth"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10,
+                )
+                time.sleep(2)
+                logging.info("[bt-tether-helper] Bluetooth service restarted")
+                return True
+            except Exception as e:
+                logging.error(f"[bt-tether-helper] Failed to restart Bluetooth: {e}")
+                return False
+        return True
+
+    def _run_cmd(self, cmd, capture=False, timeout=10):
+        """Run shell command with error handling and deadlock prevention"""
+        # Use lock to prevent multiple bluetoothctl commands from running simultaneously
+        with self._bluetoothctl_lock:
+            try:
+                # Disable bluetoothctl color output to prevent ANSI codes in logs
+                env = dict(os.environ)
+                env["NO_COLOR"] = "1"  # Standard env var to disable colors
+                env["TERM"] = "dumb"  # Make terminal report as non-color capable
+
+                if capture:
+                    result = subprocess.run(
+                        cmd, capture_output=True, text=True, timeout=timeout, env=env
+                    )
+                    # Return combined output with ANSI codes stripped to prevent log parser errors
+                    output = result.stdout + result.stderr
+                    return self._strip_ansi_codes(output)
+                else:
+                    subprocess.run(
+                        cmd,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=timeout,
+                        env=env,
+                    )
+                    return None
+            except subprocess.TimeoutExpired:
+                logging.error(
+                    f"[bt-tether-helper] Command timeout ({timeout}s): {' '.join(cmd)}"
+                )
+                # Kill hung bluetoothctl after timeout (only if it's a bluetoothctl command)
+                if cmd and cmd[0] == "bluetoothctl":
+                    try:
+                        subprocess.run(
+                            ["pkill", "-9", "bluetoothctl"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=2,
+                        )
+                        time.sleep(0.2)  # Brief pause to let process die
+                    except:
+                        pass
+                return "Timeout"
+            except Exception as e:
+                logging.error(f"[bt-tether-helper] Command failed: {' '.join(cmd)}")
+                logging.error(f"[bt-tether-helper] Exception: {e}")
+                return f"Error: {e}"
+
+    def _pan_active(self):
+        """Check if Bluetooth PAN interface is active"""
+        try:
+            out = subprocess.check_output(["ip", "a"], text=True, timeout=5)
+            # Only log detailed interface info at debug level to reduce log clutter
+            logging.debug(f"[bt-tether-helper] Network interfaces:\n{out}")
+
+            # Check for both bnep and bt-pan interfaces
+            has_bnep = "bnep" in out
+            has_bt_pan = "bt-pan" in out
+
+            if has_bnep or has_bt_pan:
+                logging.debug(
+                    f"[bt-tether-helper] Found PAN interface (bnep={has_bnep}, bt-pan={has_bt_pan})"
+                )
+                return True
+
+            logging.debug("[bt-tether-helper] No PAN interface found (bnep/bt-pan)")
+            return False
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Failed to check PAN: {e}")
+            return False
+
+    def _get_pan_interface(self):
+        """Get the name of the Bluetooth PAN interface if it exists"""
+        try:
+            out = subprocess.check_output(["ip", "link"], text=True, timeout=5)
+            # Look for bnep or bt-pan interface names
+            for line in out.split("\n"):
+                if "bnep" in line or "bt-pan" in line:
+                    # Extract interface name (e.g., "2: bnep0:" -> "bnep0")
+                    parts = line.split(":")
+                    if len(parts) >= 2:
+                        iface = parts[1].strip()
+                        return iface
+            return None
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Failed to get PAN interface: {e}")
+            return None
+
+    def _get_bluetooth_adapter(self):
+        """Get the Bluetooth adapter interface name (e.g., hci0)"""
+        try:
+            result = self._run_cmd(["hciconfig"], capture=True)
+            if result:
+                # Parse hciconfig output: "hci0:  Type: Primary  Bus: USB"
+                for line in result.split("\n"):
+                    if line and not line.startswith(" ") and "hci" in line:
+                        adapter = line.split(":")[0].strip()
+                        logging.info(
+                            f"[bt-tether-helper] Found Bluetooth adapter: {adapter}"
+                        )
+                        return adapter
+            # Fallback: assume hci0
+            logging.warning(
+                "[bt-tether-helper] Could not detect adapter, using default: hci0"
+            )
+            return "hci0"
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Failed to get Bluetooth adapter: {e}")
+            return "hci0"  # Default fallback
+
+    def _check_interface_has_ip(self, iface):
+        """Check if network interface has an IP address assigned"""
+        try:
+            result = subprocess.check_output(
+                ["ip", "addr", "show", iface], text=True, timeout=5
+            )
+            # Look for "inet " followed by an IP address (not 169.254.x.x which is link-local)
+            import re
+
+            ip_match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", result)
+            if ip_match:
+                ip_addr = ip_match.group(1)
+                # Exclude link-local addresses (169.254.x.x)
+                if not ip_addr.startswith("169.254."):
+                    logging.info(
+                        f"[bt-tether-helper] Interface {iface} has IP: {ip_addr}"
+                    )
+                    return True
+                else:
+                    logging.warning(
+                        f"[bt-tether-helper] Interface {iface} has only link-local IP: {ip_addr}"
+                    )
+                    return False
+            else:
+                logging.info(f"[bt-tether-helper] No IP address on {iface}")
+                return False
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Failed to check IP on {iface}: {e}")
+            return False
+
+    def _check_nap_service_available(self, mac):
+        """Check if the device advertises NAP (Network Access Point) service"""
+        try:
+            info = self._run_cmd(["bluetoothctl", "info", mac], capture=True)
+            if not info:
+                return False
+
+            # Look for NAP UUID in the UUIDs list
+            # NAP UUID: 00001116-0000-1000-8000-00805f9b34fb
+            nap_available = "00001116-0000-1000-8000-00805f9b34fb" in info
+
+            if nap_available:
+                logging.info(f"[bt-tether-helper] ✓ NAP service found on device {mac}")
+            else:
+                logging.warning(
+                    f"[bt-tether-helper] ✗ NAP service NOT found on device {mac}"
+                )
+                logging.warning(f"[bt-tether-helper] Available services:\n{info}")
+
+            return nap_available
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Failed to check NAP service: {e}")
+            return False
+
+    def _pair_device_interactive(self, mac):
+        """Pair device with extended timeout for user acceptance"""
+        try:
+            logging.info(
+                f"[bt-tether-helper] Starting pairing with {mac} (90s timeout for user acceptance)"
+            )
+
+            with self.lock:
+                self.message = (
+                    "Pairing... Check your phone for pairing dialog! (90 seconds)"
+                )
+
+            # First ensure Bluetooth is powered on and in pairable mode
+            self._run_cmd(["bluetoothctl", "power", "on"], capture=True)
+            time.sleep(1)
+            self._run_cmd(["bluetoothctl", "pairable", "on"], capture=True)
+            time.sleep(1)
+
+            # Scan for device to make it available to bluetoothctl
+            logging.info(f"[bt-tether-helper] Scanning for device {mac}...")
+            logging.info(
+                f"[bt-tether-helper] ⚠️ Make sure Bluetooth is ON and phone is in Bluetooth settings!"
+            )
+
+            # Start scanning
+            env = dict(os.environ)
+            env["NO_COLOR"] = "1"
+            env["TERM"] = "dumb"
+
+            # Start scan using _run_cmd instead of persistent subprocess
+            logging.info(f"[bt-tether-helper] Starting scan...")
+            self._run_cmd(["bluetoothctl", "scan", "on"], capture=False)
+
+            # Wait up to 15 seconds for device to be discovered
+            device_found = False
+            for i in range(15):
+                time.sleep(1)
+                devices = self._run_cmd(["bluetoothctl", "devices"], capture=True)
+                if devices and devices != "Timeout" and mac.upper() in devices.upper():
+                    device_found = True
+                    logging.info(f"[bt-tether-helper] ✓ Device {mac} found!")
+                    break
+                if i % 5 == 0:
+                    logging.info(f"[bt-tether-helper] Still scanning... ({i+1}s)")
+
+            # Stop scanning
+            self._run_cmd(["bluetoothctl", "scan", "off"])
+
+            if not device_found:
+                logging.error(
+                    f"[bt-tether-helper] Device {mac} not found after 15s scan!"
+                )
+                logging.error(
+                    f"[bt-tether-helper] ⚠️ Make sure your phone's Bluetooth is ON and visible!"
+                )
+                with self.lock:
+                    self.message = "Device not found. Is phone Bluetooth ON?"
+                return False
+
+            # Small delay before pairing
+            time.sleep(1)
+
+            # Setup temporary agent for this pairing session
+            logging.info(f"[bt-tether-helper] Setting up pairing agent...")
+            self._run_cmd(["bluetoothctl", "agent", "KeyboardDisplay"], capture=True)
+            time.sleep(0.5)
+            self._run_cmd(["bluetoothctl", "default-agent"], capture=True)
+            time.sleep(0.5)
+
+            # Use bluetoothctl pair directly with extended timeout
+            # KeyboardDisplay agent shows a passkey on both devices to confirm
+            logging.info(f"[bt-tether-helper] Running: bluetoothctl pair {mac}")
+            logging.info(
+                f"[bt-tether-helper] ⚠️  IMPORTANT: A passkey will appear on your phone!"
+            )
+            logging.info(
+                f"[bt-tether-helper] Verify the passkey matches on both devices, then tap 'Pair' on phone."
+            )
+
+            try:
+                # Run pairing with real-time output capture to see passkey
+                env = dict(os.environ)
+                env["NO_COLOR"] = "1"
+                env["TERM"] = "dumb"
+
+                pairing_proc = subprocess.Popen(
+                    ["bluetoothctl", "pair", mac],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    env=env,
+                )
+
+                # Read output line by line to capture passkey display
+                output_lines = []
+                try:
+                    for line in iter(pairing_proc.stdout.readline, ""):
+                        if not line:
+                            break
+                        clean_line = self._strip_ansi_codes(line.strip())
+                        if clean_line:
+                            output_lines.append(clean_line)
+                            # Skip logging noisy CHG/DEL status messages to prevent log parser errors
+                            if not clean_line.startswith(
+                                "[CHG]"
+                            ) and not clean_line.startswith("[DEL]"):
+                                logging.info(
+                                    f"[bt-tether-helper] PAIRING: {clean_line}"
+                                )
+
+                    pairing_proc.wait(timeout=90)
+                except subprocess.TimeoutExpired:
+                    pairing_proc.kill()
+                    pairing_proc.wait()
+                    raise
+
+                output = "\n".join(output_lines)
+                logging.info(
+                    f"[bt-tether-helper] Pairing complete. Full output: {output}"
+                )
+
+                # Check if pairing was successful
+                if "Pairing successful" in output:
+                    logging.info(f"[bt-tether-helper] ✓ Pairing successful!")
+                    return True
+                elif "AlreadyExists" in output or "already paired" in output.lower():
+                    logging.info(f"[bt-tether-helper] Device already paired")
+                    return True
+                elif "Failed to pair" in output:
+                    logging.error(f"[bt-tether-helper] Pairing failed: {output}")
+                    logging.error(
+                        f"[bt-tether-helper] ⚠️  Did the pairing dialog appear on your phone?"
+                    )
+                    logging.error(
+                        f"[bt-tether-helper] ⚠️  Make sure Bluetooth is enabled on the phone!"
+                    )
+                    return False
+                else:
+                    # Pairing might have completed but output unclear - check status
+                    logging.info(f"[bt-tether-helper] Checking pairing status...")
+                    time.sleep(3)
+                    pair_check = self._check_pair_status(mac)
+                    if pair_check["paired"]:
+                        logging.info(f"[bt-tether-helper] ✓ Device paired successfully")
+                        return True
+                    else:
+                        logging.warning(
+                            f"[bt-tether-helper] Pairing status unclear: {output}"
+                        )
+                        return False
+
+            except subprocess.TimeoutExpired:
+                logging.error(
+                    f"[bt-tether-helper] Pairing timeout - user did not accept on phone within 90 seconds"
+                )
+                logging.error(
+                    f"[bt-tether-helper] ⚠️  Make sure the pairing dialog appeared and you tapped 'Pair'"
+                )
+                return False
+
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Pairing error: {e}")
+            return False
+
+    def _connect_nap_dbus(self, mac):
+        """Connect to NAP service using DBus directly"""
+        try:
+            logging.info("[bt-tether-helper] Importing dbus module...")
+            import dbus
+
+            logging.info("[bt-tether-helper] dbus module imported successfully")
+
+            logging.info("[bt-tether-helper] Connecting to system bus...")
+            bus = dbus.SystemBus()
+            manager = dbus.Interface(
+                bus.get_object("org.bluez", "/"), "org.freedesktop.DBus.ObjectManager"
+            )
+            logging.info("[bt-tether-helper] System bus connected")
+
+            # Find the device object path
+            logging.info("[bt-tether-helper] Searching for device in BlueZ...")
+            objects = manager.GetManagedObjects()
+            device_path = None
+            for path, interfaces in objects.items():
+                if "org.bluez.Device1" in interfaces:
+                    props = interfaces["org.bluez.Device1"]
+                    if props.get("Address") == mac:
+                        device_path = path
+                        logging.info(
+                            f"[bt-tether-helper] Found device at path: {device_path}"
+                        )
+                        break
+
+            if not device_path:
+                logging.error(
+                    f"[bt-tether-helper] Device {mac} not found in BlueZ managed objects"
+                )
+                return False
+
+            # Connect to NAP service UUID
+            NAP_UUID = "00001116-0000-1000-8000-00805f9b34fb"
+            logging.info(
+                f"[bt-tether-helper] Connecting to NAP profile (UUID: {NAP_UUID})..."
+            )
+            device = dbus.Interface(
+                bus.get_object("org.bluez", device_path), "org.bluez.Device1"
+            )
+
+            device.ConnectProfile(NAP_UUID)
+            logging.info(
+                f"[bt-tether-helper] ✓ NAP profile connected successfully via DBus"
+            )
+            return True
+
+        except ImportError as e:
+            logging.error(f"[bt-tether-helper] python3-dbus not installed: {e}")
+            logging.error(
+                "[bt-tether-helper] Run: sudo apt-get install -y python3-dbus"
+            )
+            return False
+        except Exception as e:
+            logging.error(
+                f"[bt-tether-helper] DBus NAP connection failed: {type(e).__name__}: {e}"
+            )
+            import traceback
+
+            logging.error(f"[bt-tether-helper] Traceback: {traceback.format_exc()}")
+            return False
