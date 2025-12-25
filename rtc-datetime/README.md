@@ -26,7 +26,7 @@ A simple plugin that displays the current time and date on the Pwnagotchi screen
 
 3. Restart Pwnagotchi:
    ```bash
-   sudo systemctl restart pwnagotchi
+   pwnkill
    ```
 
 ## Configuration Options
@@ -54,7 +54,7 @@ Full list of format codes: [Python strftime documentation](https://docs.python.o
 
 The plugin uses the system time, so it's important to configure the correct timezone on your Raspberry Pi.
 
-### Method 1: Using raspi-config (Recommended)
+### Using raspi-config
 
 ```bash
 sudo raspi-config
@@ -66,84 +66,7 @@ sudo raspi-config
 4. Select your city/timezone
 5. Exit and reboot
 
-### Method 2: Using timedatectl
-
-```bash
-# List available timezones
-timedatectl list-timezones
-
-# Set timezone (example: US Eastern Time)
-sudo timedatectl set-timezone America/New_York
-
-# Set timezone (example: Central European Time)
-sudo timedatectl set-timezone Europe/Amsterdam
-
-# Verify timezone
-timedatectl
-```
-
-### Method 3: Manual Configuration
-
-```bash
-# Create symbolic link to timezone file
-sudo ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
-
-# Update timezone configuration
-echo "America/New_York" | sudo tee /etc/timezone
-
-# Reconfigure tzdata
-sudo dpkg-reconfigure -f noninteractive tzdata
-```
-
-### Common Timezones
-
-- **US Pacific**: `America/Los_Angeles`
-- **US Mountain**: `America/Denver`
-- **US Central**: `America/Chicago`
-- **US Eastern**: `America/New_York`
-- **UK**: `Europe/London`
-- **Central Europe**: `Europe/Berlin`, `Europe/Amsterdam`, `Europe/Paris`
-- **Eastern Europe**: `Europe/Athens`, `Europe/Bucharest`
-- **Australia**: `Australia/Sydney`, `Australia/Melbourne`
-- **Japan**: `Asia/Tokyo`
-- **India**: `Asia/Kolkata`
-
-### Setting System Time Manually
-
-If your Pwnagotchi doesn't have internet access to sync time automatically:
-
-```bash
-# Set date and time manually (YYYY-MM-DD HH:MM:SS)
-sudo date -s "2025-12-25 14:30:00"
-
-# Sync hardware clock with system time
-sudo hwclock --systohc
-
-# Read hardware clock
-sudo hwclock --show
-```
-
-### Enable NTP Time Sync (if internet available)
-
-```bash
-# Install NTP
-sudo apt-get install -y ntp
-
-# Enable NTP synchronization
-sudo timedatectl set-ntp true
-
-# Check NTP status
-timedatectl
-```
-
 ## Troubleshooting
-
-### Time is Incorrect
-
-- Check timezone: `timedatectl`
-- Set correct timezone (see above)
-- Manually set time if no internet: `sudo date -s "YYYY-MM-DD HH:MM:SS"`
-- Sync hardware clock: `sudo hwclock --systohc`
 
 ### Plugin Not Showing
 
@@ -156,18 +79,6 @@ timedatectl
 - Verify format string syntax: `man strftime`
 - Test format in terminal: `date "+%H:%M %d-%m"`
 - Ensure quotes are properly escaped in TOML config
-
-### Display Position Issues
-
-The Pwnagotchi e-ink display is typically **250x122 pixels**. Make sure your position coordinates are within these bounds:
-
-```toml
-# Examples of valid positions:
-main.plugins.rtc-datetime.position = [0, 0]      # Top-left corner
-main.plugins.rtc-datetime.position = [0, 92]     # Bottom-left (default)
-main.plugins.rtc-datetime.position = [180, 0]    # Top-right area
-main.plugins.rtc-datetime.position = [100, 60]   # Center area
-```
 
 ## License
 

@@ -2,18 +2,16 @@
 
 A comprehensive Bluetooth tethering plugin that provides guided setup and automatic connection management for sharing your phone's internet connection with your Pwnagotchi.
 
-> **Note:** This plugin has been tested on Android devices with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). Compatibility with iOS and other Pwnagotchi versions may vary.
+> **⚠️ Important:** This plugin has been tested **only on an Android 15 device** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your Android device** for this plugin to work. Compatibility with other Android versions and Pwnagotchi versions has not been tested.
 
 ## Features
 
 - **Web Interface**: User-friendly web UI for managing Bluetooth connections
 - **Automatic Pairing**: Interactive pairing with passkey display and confirmation
-- **Connection Management**: Connect, disconnect, and unpair devices with one click
-- **Device Scanning**: Scan for nearby Bluetooth devices
+- **Connection Management**: Connect and disconnect devices with one click
+- **Device Scanning**: Scan for nearby Bluetooth devices to find and copy MAC addresses
 - **Status Display**: Real-time connection status on Pwnagotchi screen
 - **PAN (Personal Area Network) Support**: Automatic network interface configuration
-- **Smart Recovery**: Automatically restarts Bluetooth service if unresponsive
-- **Connection Caching**: Reduces polling to prevent performance issues
 
 ## Installation
 
@@ -30,18 +28,23 @@ A comprehensive Bluetooth tethering plugin that provides guided setup and automa
    sudo apt-get install -y python3-dbus bluez
    ```
 
-3. Enable the plugin in `/etc/pwnagotchi/config.toml`:
+3. Find your phone's MAC address:
+
+   - Use the web interface scan function (see Usage section below), or
+   - Check in Android: Settings → About Phone → Status → Bluetooth address
+
+4. Add your phone's MAC address to `/etc/pwnagotchi/config.toml`:
 
    ```toml
    main.plugins.bt-tether-helper.enabled = true
-   main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Optional: your phone's MAC
+   main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC
    main.plugins.bt-tether-helper.show_on_screen = true  # Optional: show status on display
    main.plugins.bt-tether-helper.position = [200, 0]  # Optional: custom position [x, y]
    ```
 
-4. Restart Pwnagotchi:
+5. Restart Pwnagotchi:
    ```bash
-   sudo systemctl restart pwnagotchi
+   pwnkill
    ```
 
 ## Usage
@@ -52,30 +55,30 @@ Access the web interface at: `http://<pwnagotchi-ip>:8080/plugins/bt-tether-help
 
 **Features:**
 
-- **Connect**: Enter your phone's MAC address and initiate connection
-- **Disconnect**: Safely disconnect from paired device
-- **Unpair**: Remove pairing with a device
+- **Connect to Phone**: Initiate connection to your configured device
+- **Disconnect**: Safely disconnect from paired device (automatically unpairs)
 - **Scan**: Discover nearby Bluetooth devices
 - **Status**: Real-time connection and internet status
 
 ### Connection Process
 
-1. **Enable Bluetooth Tethering on Your Phone:**
+1. **Enable Bluetooth Tethering on Your Android Phone:**
 
-   - **Android**: Settings → Connections → Bluetooth → More → Bluetooth tethering
-   - **iPhone**: Settings → Personal Hotspot → Allow Others to Join
+   Go to: Settings → Network & internet → Hotspot & tethering → Bluetooth tethering (Enable it)
+
+   > **Note:** Bluetooth tethering **must be enabled** before attempting to connect.
 
 2. **Pairing (First Time Only):**
 
-   - Enter your phone's MAC address in the web interface
-   - Click "Connect"
+   - Make sure your phone's MAC address is configured in `/etc/pwnagotchi/config.toml` (see Installation)
+   - Click "Connect to Phone" in the web interface
    - A pairing dialog will appear on your phone
    - Verify the passkey matches on both devices
    - Tap "Pair" on your phone
    - Wait for connection to complete (up to 90 seconds)
 
 3. **Subsequent Connections:**
-   - Once paired, simply click "Connect" in the web interface
+   - Once paired, simply click "Connect to Phone" in the web interface
    - Device will automatically connect and establish internet connection
 
 ### On-Screen Status Indicators
@@ -92,7 +95,7 @@ When `show_on_screen` is enabled, a status indicator appears on the Pwnagotchi d
 
 ```toml
 main.plugins.bt-tether-helper.enabled = true
-main.plugins.bt-tether-helper.mac = ""  # Phone MAC address (optional, can set via web UI)
+main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC address
 main.plugins.bt-tether-helper.show_on_screen = true  # Show status on display (default: true)
 main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] (optional)
 ```
@@ -116,7 +119,7 @@ main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] (opt
 
 - The plugin automatically detects and restarts hung Bluetooth services
 - Manual restart: `sudo systemctl restart bluetooth`
-- Check logs: `sudo journalctl -u pwnagotchi -f`
+- Check logs: `pwnlog`
 
 ### Device Won't Disconnect
 
@@ -134,35 +137,10 @@ main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] (opt
 Settings → About Phone → Status → Bluetooth address
 ```
 
-**iPhone:**
-
-```
-Settings → General → About → Bluetooth
-```
-
-**Linux/Terminal:**
+**Via Terminal:**
 
 ```bash
 bluetoothctl devices
-```
-
-### Manual Commands
-
-```bash
-# List paired devices
-bluetoothctl devices
-
-# Check device info
-bluetoothctl info XX:XX:XX:XX:XX:XX
-
-# Manual connect
-bluetoothctl connect XX:XX:XX:XX:XX:XX
-
-# Manual disconnect
-bluetoothctl disconnect XX:XX:XX:XX:XX:XX
-
-# Check network interfaces
-ip a
 ```
 
 ## API Endpoints
@@ -195,5 +173,5 @@ GPL3
 For issues or questions:
 
 1. Check the troubleshooting section above
-2. Review Pwnagotchi logs: `sudo journalctl -u pwnagotchi -f`
+2. Review Pwnagotchi logs: `pwnlog`
 3. Open an issue with detailed error messages and configuration
