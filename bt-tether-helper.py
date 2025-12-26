@@ -167,6 +167,20 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(mac)) return;
         
         try {
+          // First check the plugin's internal status
+          const statusResponse = await fetch(`/plugins/bt-tether-helper/status`);
+          const statusData = await statusResponse.json();
+          
+          // Show connecting indicator if pairing or connecting
+          if (statusData.status === 'PAIRING' || statusData.status === 'CONNECTING') {
+            showFeedback(`<span class="spinner"></span> ${statusData.message}`, "info");
+            
+            // Disable quick connect button during connection
+            const connectBtn = document.getElementById('quickConnectBtn');
+            connectBtn.disabled = true;
+            connectBtn.innerHTML = '<span class="spinner"></span> Connecting...';
+          }
+          
           const response = await fetch(`/plugins/bt-tether-helper/connection-status?mac=${encodeURIComponent(mac)}`);
           const data = await response.json();
           
@@ -199,6 +213,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           // Show/hide connect/disconnect buttons based on connection status
           const connectBtn = document.getElementById('quickConnectBtn');
           const disconnectSection = document.getElementById('disconnectSection');
+          
+          // Re-enable connect button if not currently connecting
+          if (statusData.status !== 'PAIRING' && statusData.status !== 'CONNECTING') {
+            connectBtn.disabled = false;
+            connectBtn.innerHTML = '⚡ Connect to Phone';
+          }
+          
           if (data.connected) {
             connectBtn.style.display = 'none';
             disconnectSection.style.display = 'block';
@@ -403,6 +424,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         if (message.includes('PASSKEY:')) {
           pairingText.innerHTML = message.replace(/PASSKEY: (\d{6})/, 
             '<b style="font-size: 24px; display: block; margin: 10px 0;">🔑 PASSKEY: $1</b>');
+        } else if (message.includes('<span class="spinner">')) {
+          // Allow HTML for spinner and other HTML elements
+          pairingText.innerHTML = message;
         } else {
           pairingText.textContent = message;
         }
@@ -456,6 +480,12 @@ class BTTetherHelper(Plugin):
         # Flag to indicate when connection/pairing is in progress
         self._connection_in_progress = False
 
+        # Agent tracking for persistent pairing agent
+        self.agent_process = None  # Track agent process
+        self.agent_log_fd = None  # File descriptor for agent log
+        self.agent_log_path = None  # Path to agent log file
+        self.current_passkey = None  # Store passkey for display in UI
+
         # Kill any lingering bluetoothctl processes to prevent deadlocks
         try:
             subprocess.run(
@@ -485,9 +515,10 @@ class BTTetherHelper(Plugin):
                 f"[bt-tether-helper] Failed to restart Bluetooth service: {e}"
             )
 
-        # DON'T start persistent agent - it blocks other bluetoothctl commands
-        # Agent will be started temporarily only during pairing
-        logging.info("[bt-tether-helper] Loaded (agent will start only during pairing)")
+        # Start persistent pairing agent in background
+        self._start_pairing_agent()
+
+        logging.info("[bt-tether-helper] Loaded")
 
     @property
     def status(self):
@@ -528,6 +559,12 @@ class BTTetherHelper(Plugin):
             return
 
         try:
+            # Show connecting indicator when connection is in progress
+            # > = Connecting/Pairing in progress
+            if self._connection_in_progress:
+                ui.set("bt-status", ">")
+                return
+
             # Get current connection status
             status = self._get_full_connection_status(self.phone_mac)
 
@@ -551,6 +588,143 @@ class BTTetherHelper(Plugin):
                 ui.set("bt-status", "?")
             except:
                 pass
+
+    def _start_pairing_agent(self):
+        """Start a persistent bluetoothctl agent to handle pairing requests"""
+        try:
+            if self.agent_process and self.agent_process.poll() is None:
+                logging.info("[bt-tether-helper] Pairing agent already running")
+                return
+
+            logging.info("[bt-tether-helper] Starting persistent pairing agent...")
+
+            # Use KeyboardDisplay agent - shows a passkey on both devices for confirmation
+            # This is the most compatible method for Android phones
+            agent_commands = """power on
+agent KeyboardDisplay
+default-agent
+"""
+
+            env = dict(os.environ)
+            env["NO_COLOR"] = "1"
+            env["TERM"] = "dumb"
+
+            # Create log file for agent output so we can see passkeys
+            import tempfile
+
+            self.agent_log_fd, self.agent_log_path = tempfile.mkstemp(
+                prefix="bt-agent-", suffix=".log"
+            )
+            logging.info(
+                f"[bt-tether-helper] Agent output will be logged to: {self.agent_log_path}"
+            )
+
+            self.agent_process = subprocess.Popen(
+                ["bluetoothctl"],
+                stdin=subprocess.PIPE,
+                stdout=self.agent_log_fd,
+                stderr=self.agent_log_fd,
+                text=False,  # Use binary mode for file descriptor
+                env=env,
+            )
+
+            # Send commands to bluetoothctl
+            self.agent_process.stdin.write(agent_commands.encode())
+            self.agent_process.stdin.flush()
+
+            logging.info(
+                "[bt-tether-helper] ✓ Persistent pairing agent started (KeyboardDisplay mode - passkey will be shown)"
+            )
+            logging.info(
+                f"[bt-tether-helper] 🔑 Passkeys will appear in: {self.agent_log_path}"
+            )
+
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Failed to start pairing agent: {e}")
+
+    def _monitor_agent_log_for_passkey(self, passkey_found_event):
+        """Monitor agent log file for passkey display in real-time and auto-confirm"""
+        try:
+            import time
+
+            logging.info("[bt-tether-helper] Monitoring agent log for passkey...")
+
+            # Tail the agent log file
+            with open(self.agent_log_path, "r") as f:
+                # Seek to end of file
+                f.seek(0, 2)
+
+                # Monitor for up to 90 seconds
+                start_time = time.time()
+                last_prompt = None
+                while time.time() - start_time < 90:
+                    line = f.readline()
+                    if line:
+                        clean_line = self._strip_ansi_codes(line.strip())
+                        if clean_line:
+                            # Look for passkey or confirmation request
+                            if (
+                                "passkey" in clean_line.lower()
+                                or "confirm passkey" in clean_line.lower()
+                            ):
+                                # Extract passkey number (usually 6 digits)
+                                import re
+
+                                passkey_match = re.search(
+                                    r"passkey\s+(\d{6})", clean_line, re.IGNORECASE
+                                )
+                                if passkey_match:
+                                    self.current_passkey = passkey_match.group(1)
+                                    logging.warning(
+                                        f"[bt-tether-helper] 🔑 PASSKEY: {self.current_passkey} - Confirm on phone!"
+                                    )
+
+                                    # Auto-confirm passkey on Pwnagotchi side
+                                    if (
+                                        self.agent_process
+                                        and self.agent_process.poll() is None
+                                    ):
+                                        try:
+                                            logging.info(
+                                                "[bt-tether-helper] ✅ Auto-confirming on Pwnagotchi & waiting for phone..."
+                                            )
+                                            self.agent_process.stdin.write(b"yes\n")
+                                            self.agent_process.stdin.flush()
+                                        except Exception as confirm_err:
+                                            logging.error(
+                                                f"[bt-tether-helper] Failed to auto-confirm: {confirm_err}"
+                                            )
+
+                                passkey_found_event.set()
+                            elif "request confirmation" in clean_line.lower():
+                                logging.info(f"[bt-tether-helper] 📱 {clean_line}")
+                            elif clean_line.endswith("#"):
+                                # Only log prompt changes to reduce spam
+                                if clean_line != last_prompt:
+                                    last_prompt = clean_line
+                                    logging.debug(
+                                        f"[bt-tether-helper] Prompt: {clean_line}"
+                                    )
+                            elif not clean_line.startswith("[CHG]"):
+                                # Log other important output at debug level
+                                logging.debug(f"[bt-tether-helper] Agent: {clean_line}")
+                    else:
+                        # No new data, sleep briefly
+                        time.sleep(0.1)
+
+            logging.info("[bt-tether-helper] Agent log monitoring timeout (90s)")
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Error monitoring agent log: {e}")
+
+    def _strip_ansi_codes(self, text):
+        """Remove ANSI color/control codes from text"""
+        if not text:
+            return text
+        import re
+
+        # Remove ANSI escape sequences
+        ansi_escape = re.compile(r"\x1b\[[0-9;]*[mGKHF]|\x01|\x02")
+        return ansi_escape.sub("", text)
 
     def on_webhook(self, path, request):
         try:
@@ -703,12 +877,17 @@ class BTTetherHelper(Plugin):
             logging.info(f"[bt-tether-helper] Disconnect result: {result}")
             time.sleep(2)
 
-            # Skip status verification since device is already blocked (bluetoothctl info hangs on blocked devices)
+            # Unpair (remove) the device completely
+            logging.info(f"[bt-tether-helper] Removing device to unpair...")
+            remove_result = self._run_cmd(["bluetoothctl", "remove", mac], capture=True)
+            logging.info(f"[bt-tether-helper] Remove result: {remove_result}")
+            time.sleep(1)
+
             logging.info(
-                f"[bt-tether-helper] Device {mac} blocked and disconnected successfully"
+                f"[bt-tether-helper] Device {mac} disconnected, unpaired, and blocked successfully"
             )
 
-            # Return success without querying blocked device
+            # Return success
             final_status = {"connected": False, "paired": False}
             logging.info(
                 f"[bt-tether-helper] Final status - Connected: {final_status['connected']}, Paired: {final_status['paired']}"
@@ -716,7 +895,7 @@ class BTTetherHelper(Plugin):
 
             return {
                 "success": True,
-                "message": f"Device {mac} disconnected and blocked",
+                "message": f"Device {mac} disconnected, unpaired, and blocked",
             }
         except Exception as e:
             logging.error(f"[bt-tether-helper] Disconnect error: {e}")
@@ -896,7 +1075,15 @@ class BTTetherHelper(Plugin):
 
             # Start scanning
             logging.info("[bt-tether-helper] Starting scan...")
-            self._run_cmd(["bluetoothctl", "scan", "on"], capture=False)
+            # Use subprocess directly to prevent [CHG] messages in logs
+            try:
+                subprocess.Popen(
+                    ["bluetoothctl", "scan", "on"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except:
+                pass
 
             # Scan for 30 seconds
             time.sleep(30)
@@ -905,7 +1092,15 @@ class BTTetherHelper(Plugin):
             devices_output = self._run_cmd(["bluetoothctl", "devices"], capture=True)
 
             # Stop scanning
-            self._run_cmd(["bluetoothctl", "scan", "off"])
+            try:
+                subprocess.Popen(
+                    ["bluetoothctl", "scan", "off"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                time.sleep(0.5)
+            except:
+                pass
 
             devices = []
             if devices_output:
@@ -961,7 +1156,21 @@ class BTTetherHelper(Plugin):
                     self.message = "Bluetooth service unresponsive. Try: sudo systemctl restart bluetooth"
                 return
 
-            # Unblock device if it was blocked during previous disconnect
+            # Make Pwnagotchi discoverable and pairable
+            logging.info(f"[bt-tether-helper] Making Pwnagotchi discoverable...")
+            with self.lock:
+                self.message = "Making Pwnagotchi discoverable..."
+            self._run_cmd(["bluetoothctl", "discoverable", "on"], capture=True)
+            self._run_cmd(["bluetoothctl", "pairable", "on"], capture=True)
+            time.sleep(2)
+
+            # Remove device completely to ensure fresh pairing
+            logging.info(f"[bt-tether-helper] Removing device for fresh pairing...")
+            with self.lock:
+                self.message = "Removing old pairing..."
+            self._run_cmd(["bluetoothctl", "remove", mac], capture=True)
+            time.sleep(1)
+
             logging.info(
                 f"[bt-tether-helper] Unblocking device in case it was blocked..."
             )
@@ -1004,40 +1213,54 @@ class BTTetherHelper(Plugin):
             with self.lock:
                 self.message = "Setting device as trusted..."
             self._run_cmd(["bluetoothctl", "trust", mac])
-            time.sleep(1)
 
-            # Connect to device
+            # Wait longer after pairing/trust for phone to be ready
+            logging.info(f"[bt-tether-helper] Waiting for phone to be ready...")
+            with self.lock:
+                self.message = "Waiting for phone to be ready..."
+            time.sleep(5)  # Give phone time after pairing
+
+            # Skip bluetoothctl connect - pairing already establishes connection
+            # Go directly to NAP profile connection
             with self.lock:
                 self.status = "CONNECTING"
-                self.message = "Connecting to device via Bluetooth..."
+                self.message = "Waiting for Bluetooth connection..."
 
-            logging.info(f"[bt-tether-helper] Connecting to device...")
-            connect_result = self._run_cmd(
-                ["bluetoothctl", "connect", mac], capture=True
+            # Wait for Bluetooth connection to be established automatically after pairing
+            logging.info(
+                f"[bt-tether-helper] Waiting for Bluetooth connection to establish..."
             )
-            logging.info(f"[bt-tether-helper] Connect result: {connect_result}")
-
-            # Wait for connection to establish
-            with self.lock:
-                self.message = "Waiting for connection to establish..."
-            time.sleep(3)
-
-            # Check connection status
-            with self.lock:
-                self.message = "Verifying Bluetooth connection..."
-            status = self._check_pair_status(mac)
-            if not status["connected"]:
-                logging.warning(
-                    f"[bt-tether-helper] Device not connected after connect command"
+            connection_established = False
+            for check in range(10):
+                time.sleep(2)
+                status = self._check_pair_status(mac)
+                if status["connected"]:
+                    connection_established = True
+                    logging.info(
+                        f"[bt-tether-helper] ✓ Bluetooth connection established!"
+                    )
+                    break
+                logging.info(
+                    f"[bt-tether-helper] Waiting for connection... ({(check+1)*2}s)"
                 )
-                with self.lock:
-                    self.status = "ERROR"
-                    self.message = "Connection failed. Check if Bluetooth tethering is enabled on phone."
-                return
 
-            logging.info(f"[bt-tether-helper] Device connected!")
+            if not connection_established:
+                logging.warning(
+                    f"[bt-tether-helper] Bluetooth connection did not establish automatically after pairing"
+                )
+                logging.info(
+                    f"[bt-tether-helper] This might be normal - will try NAP connection anyway"
+                )
+
+            logging.info(f"[bt-tether-helper] Proceeding to NAP connection...")
             with self.lock:
-                self.message = "Bluetooth connected ✓ Setting up internet..."
+                self.message = "Connecting to NAP profile for internet..."
+
+            # Additional wait to ensure phone is ready for NAP connection
+            logging.info(
+                f"[bt-tether-helper] Waiting 5 seconds for phone to be ready for tethering..."
+            )
+            time.sleep(5)
 
             # Try to establish PAN connection
             logging.info(f"[bt-tether-helper] Establishing PAN connection...")
@@ -1045,12 +1268,21 @@ class BTTetherHelper(Plugin):
                 self.status = "CONNECTING"
                 self.message = "Connecting to NAP profile for internet..."
 
-            # Try DBus connection to NAP profile
-            if self._connect_nap_dbus(mac):
+            # Try DBus connection to NAP profile (with retry for br-connection-busy)
+            nap_connected = False
+            for retry in range(3):
+                if retry > 0:
+                    logging.info(
+                        f"[bt-tether-helper] Retrying NAP connection (attempt {retry + 1}/3)..."
+                    )
+                    time.sleep(3)  # Wait for previous connection attempt to settle
+
+                nap_connected = self._connect_nap_dbus(mac)
+                if nap_connected:
+                    break
+
+            if nap_connected:
                 logging.info(f"[bt-tether-helper] NAP connection successful!")
-                with self.lock:
-                    self.message = "NAP connected ✓ Checking for network interface..."
-                time.sleep(2)
 
                 # Check if PAN interface is up
                 if self._pan_active():
@@ -1059,6 +1291,7 @@ class BTTetherHelper(Plugin):
                     with self.lock:
                         self.status = "CONNECTED"
                         self.message = f"✓ Connected! Internet via {iface}"
+                        self._connection_in_progress = False
                 else:
                     logging.warning(
                         f"[bt-tether-helper] NAP connected but no interface detected"
@@ -1066,11 +1299,13 @@ class BTTetherHelper(Plugin):
                     with self.lock:
                         self.status = "CONNECTED"
                         self.message = "Connected but no internet. Enable Bluetooth tethering on phone."
+                        self._connection_in_progress = False
             else:
                 logging.warning(f"[bt-tether-helper] NAP connection failed")
                 with self.lock:
                     self.status = "CONNECTED"
                     self.message = "Bluetooth connected but tethering failed. Enable tethering on phone."
+                    self._connection_in_progress = False
 
         except Exception as e:
             logging.error(f"[bt-tether-helper] Connection thread error: {e}")
@@ -1081,8 +1316,10 @@ class BTTetherHelper(Plugin):
                 self.status = "ERROR"
                 self.message = f"Connection error: {str(e)}"
         finally:
-            # Always clear the flag when connection completes (success or failure)
-            self._connection_in_progress = False
+            # Clear the flag if not already cleared (error cases)
+            with self.lock:
+                if self._connection_in_progress:
+                    self._connection_in_progress = False
             self._invalidate_status_cache()  # Force fresh status after connection
 
     def _strip_ansi_codes(self, text):
@@ -1316,163 +1553,115 @@ class BTTetherHelper(Plugin):
             return False
 
     def _pair_device_interactive(self, mac):
-        """Pair device with extended timeout for user acceptance"""
+        """Pair device - persistent agent will handle the dialog"""
         try:
-            logging.info(
-                f"[bt-tether-helper] Starting pairing with {mac} (90s timeout for user acceptance)"
-            )
+            logging.info(f"[bt-tether-helper] Starting pairing with {mac}...")
 
             with self.lock:
-                self.message = (
-                    "Pairing... Check your phone for pairing dialog! (90 seconds)"
-                )
+                self.message = "Scanning for phone..."
 
             # First ensure Bluetooth is powered on and in pairable mode
             self._run_cmd(["bluetoothctl", "power", "on"], capture=True)
             time.sleep(1)
             self._run_cmd(["bluetoothctl", "pairable", "on"], capture=True)
+            self._run_cmd(["bluetoothctl", "discoverable", "on"], capture=True)
             time.sleep(1)
 
-            # Scan for device to make it available to bluetoothctl
+            # Scan for device first so bluetoothctl knows about it
             logging.info(f"[bt-tether-helper] Scanning for device {mac}...")
-            logging.info(
-                f"[bt-tether-helper] ⚠️ Make sure Bluetooth is ON and phone is in Bluetooth settings!"
-            )
+            try:
+                subprocess.Popen(
+                    ["bluetoothctl", "scan", "on"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except:
+                pass
 
-            # Start scanning
-            env = dict(os.environ)
-            env["NO_COLOR"] = "1"
-            env["TERM"] = "dumb"
-
-            # Start scan using _run_cmd instead of persistent subprocess
-            logging.info(f"[bt-tether-helper] Starting scan...")
-            self._run_cmd(["bluetoothctl", "scan", "on"], capture=False)
-
-            # Wait up to 15 seconds for device to be discovered
+            # Wait up to 60 seconds for device to be discovered
             device_found = False
-            for i in range(15):
+            for i in range(60):
                 time.sleep(1)
                 devices = self._run_cmd(["bluetoothctl", "devices"], capture=True)
                 if devices and devices != "Timeout" and mac.upper() in devices.upper():
                     device_found = True
                     logging.info(f"[bt-tether-helper] ✓ Device {mac} found!")
                     break
-                if i % 5 == 0:
-                    logging.info(f"[bt-tether-helper] Still scanning... ({i+1}s)")
+                if i % 5 == 0 and i > 0:
+                    logging.info(f"[bt-tether-helper] Still scanning... ({i}s)")
 
-            # Stop scanning
-            self._run_cmd(["bluetoothctl", "scan", "off"])
+            # Stop scan
+            try:
+                subprocess.Popen(
+                    ["bluetoothctl", "scan", "off"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                time.sleep(0.5)
+            except:
+                pass
 
             if not device_found:
-                logging.error(
-                    f"[bt-tether-helper] Device {mac} not found after 15s scan!"
-                )
-                logging.error(
-                    f"[bt-tether-helper] ⚠️ Make sure your phone's Bluetooth is ON and visible!"
-                )
+                logging.error(f"[bt-tether-helper] Device {mac} not found after scan!")
                 with self.lock:
-                    self.message = "Device not found. Is phone Bluetooth ON?"
+                    self.message = "Phone not found. Is Bluetooth ON?"
                 return False
 
-            # Small delay before pairing
-            time.sleep(1)
+            with self.lock:
+                self.message = "Phone found! Initiating pairing..."
 
-            # Setup temporary agent for this pairing session
-            logging.info(f"[bt-tether-helper] Setting up pairing agent...")
-            self._run_cmd(["bluetoothctl", "agent", "KeyboardDisplay"], capture=True)
-            time.sleep(0.5)
-            self._run_cmd(["bluetoothctl", "default-agent"], capture=True)
-            time.sleep(0.5)
+            # Start monitoring agent log for passkey in background
+            passkey_found = threading.Event()
+            monitor_thread = threading.Thread(
+                target=self._monitor_agent_log_for_passkey,
+                args=(passkey_found,),
+                daemon=True,
+            )
+            monitor_thread.start()
 
-            # Use bluetoothctl pair directly with extended timeout
-            # KeyboardDisplay agent shows a passkey on both devices to confirm
+            # Initiate pairing from Pwnagotchi side - agent will show passkey dialog on phone
             logging.info(f"[bt-tether-helper] Running: bluetoothctl pair {mac}")
             logging.info(
-                f"[bt-tether-helper] ⚠️  IMPORTANT: A passkey will appear on your phone!"
-            )
-            logging.info(
-                f"[bt-tether-helper] Verify the passkey matches on both devices, then tap 'Pair' on phone."
+                f"[bt-tether-helper] ⚠️  Pairing dialog will appear on your phone - confirm the passkey!"
             )
 
             try:
-                # Run pairing with real-time output capture to see passkey
+                # Use subprocess.run with timeout for pairing command
                 env = dict(os.environ)
                 env["NO_COLOR"] = "1"
                 env["TERM"] = "dumb"
 
-                pairing_proc = subprocess.Popen(
+                result = subprocess.run(
                     ["bluetoothctl", "pair", mac],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
+                    capture_output=True,
                     text=True,
+                    timeout=90,
                     env=env,
                 )
 
-                # Read output line by line to capture passkey display
-                output_lines = []
-                try:
-                    for line in iter(pairing_proc.stdout.readline, ""):
-                        if not line:
-                            break
-                        clean_line = self._strip_ansi_codes(line.strip())
-                        if clean_line:
-                            output_lines.append(clean_line)
-                            # Skip logging noisy CHG/DEL status messages to prevent log parser errors
-                            if not clean_line.startswith(
-                                "[CHG]"
-                            ) and not clean_line.startswith("[DEL]"):
-                                logging.info(
-                                    f"[bt-tether-helper] PAIRING: {clean_line}"
-                                )
+                output = result.stdout + result.stderr
+                clean_output = self._strip_ansi_codes(output)
 
-                    pairing_proc.wait(timeout=90)
-                except subprocess.TimeoutExpired:
-                    pairing_proc.kill()
-                    pairing_proc.wait()
-                    raise
-
-                output = "\n".join(output_lines)
-                logging.info(
-                    f"[bt-tether-helper] Pairing complete. Full output: {output}"
-                )
-
-                # Check if pairing was successful
-                if "Pairing successful" in output:
+                # Check if pairing succeeded
+                if (
+                    "Pairing successful" in clean_output
+                    or "AlreadyExists" in clean_output
+                ):
                     logging.info(f"[bt-tether-helper] ✓ Pairing successful!")
                     return True
-                elif "AlreadyExists" in output or "already paired" in output.lower():
-                    logging.info(f"[bt-tether-helper] Device already paired")
-                    return True
-                elif "Failed to pair" in output:
-                    logging.error(f"[bt-tether-helper] Pairing failed: {output}")
-                    logging.error(
-                        f"[bt-tether-helper] ⚠️  Did the pairing dialog appear on your phone?"
-                    )
-                    logging.error(
-                        f"[bt-tether-helper] ⚠️  Make sure Bluetooth is enabled on the phone!"
-                    )
-                    return False
-                else:
-                    # Pairing might have completed but output unclear - check status
-                    logging.info(f"[bt-tether-helper] Checking pairing status...")
-                    time.sleep(3)
-                    pair_check = self._check_pair_status(mac)
-                    if pair_check["paired"]:
-                        logging.info(f"[bt-tether-helper] ✓ Device paired successfully")
+                elif result.returncode == 0:
+                    # Command succeeded but output unclear - check status
+                    time.sleep(2)
+                    pair_status = self._check_pair_status(mac)
+                    if pair_status["paired"]:
+                        logging.info(f"[bt-tether-helper] ✓ Pairing successful!")
                         return True
-                    else:
-                        logging.warning(
-                            f"[bt-tether-helper] Pairing status unclear: {output}"
-                        )
-                        return False
+
+                logging.error(f"[bt-tether-helper] Pairing failed: {clean_output}")
+                return False
 
             except subprocess.TimeoutExpired:
-                logging.error(
-                    f"[bt-tether-helper] Pairing timeout - user did not accept on phone within 90 seconds"
-                )
-                logging.error(
-                    f"[bt-tether-helper] ⚠️  Make sure the pairing dialog appeared and you tapped 'Pair'"
-                )
+                logging.error(f"[bt-tether-helper] Pairing timeout (90s)")
                 return False
 
         except Exception as e:
@@ -1536,9 +1725,23 @@ class BTTetherHelper(Plugin):
             )
             return False
         except Exception as e:
+            error_msg = str(e)
             logging.error(
                 f"[bt-tether-helper] DBus NAP connection failed: {type(e).__name__}: {e}"
             )
+
+            # Check for common errors and provide helpful hints
+            if (
+                "br-connection-create-socket" in error_msg
+                or "br-connection-profile-unavailable" in error_msg
+            ):
+                logging.error(
+                    "[bt-tether-helper] ⚠️  Bluetooth tethering is NOT enabled on your phone!"
+                )
+                logging.error(
+                    "[bt-tether-helper] ⚠️  Go to Settings → Network & internet → Hotspot & tethering → Enable 'Bluetooth tethering'"
+                )
+
             import traceback
 
             logging.error(f"[bt-tether-helper] Traceback: {traceback.format_exc()}")
