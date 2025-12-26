@@ -242,10 +242,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
               pairingFeedback.style.display = 'none';
             }
             
-            // Stop polling when fully connected to save resources
+            // Hide status feedback when PAN is active (fully connected)
             if (data.pan_active) {
+              pairingFeedback.style.display = 'none';
               console.log('Fully connected - stopping status polling');
               stopStatusPolling();
+            }
+          }
+          
+          // Uncheck unpair checkbox when disconnected
+          if (!data.connected) {
+            const unpairCheckbox = document.getElementById('unpairCheckbox');
+            if (unpairCheckbox) {
+              unpairCheckbox.checked = false;
             }
           }
           
@@ -472,7 +481,7 @@ class BTTetherHelper(Plugin):
         # Cache for status to avoid excessive bluetoothctl polling
         self._status_cache = None
         self._status_cache_time = 0
-        self._status_cache_ttl = 30  # Cache status for 30 seconds
+        self._status_cache_ttl = 5  # Cache status for 5 seconds (faster screen updates)
 
         # Lock to prevent multiple bluetoothctl commands from running simultaneously
         self._bluetoothctl_lock = threading.Lock()
@@ -823,23 +832,7 @@ default-agent
 
             logging.info(f"[bt-tether-helper] Disconnecting from device {mac}...")
 
-            # FIRST: Block the device immediately to prevent reconnection attempts
-            logging.info(
-                f"[bt-tether-helper] Blocking device first to prevent reconnection..."
-            )
-            block_result = self._run_cmd(["bluetoothctl", "block", mac], capture=True)
-            logging.info(f"[bt-tether-helper] Block result: {block_result}")
-            time.sleep(1)
-
-            # Remove trust to prevent automatic reconnection
-            logging.info(
-                f"[bt-tether-helper] Removing trust to prevent auto-reconnect..."
-            )
-            trust_result = self._run_cmd(["bluetoothctl", "untrust", mac], capture=True)
-            logging.info(f"[bt-tether-helper] Untrust result: {trust_result}")
-            time.sleep(1)
-
-            # Disconnect NAP profile via DBus if connected
+            # FIRST: Disconnect NAP profile via DBus if connected
             try:
                 import dbus
 
@@ -873,14 +866,31 @@ default-agent
                 logging.debug(f"[bt-tether-helper] DBus operation: {e}")
 
             # Disconnect the Bluetooth connection
+            logging.info(f"[bt-tether-helper] Disconnecting Bluetooth...")
             result = self._run_cmd(["bluetoothctl", "disconnect", mac], capture=True)
             logging.info(f"[bt-tether-helper] Disconnect result: {result}")
             time.sleep(2)
+
+            # Remove trust to prevent automatic reconnection
+            logging.info(
+                f"[bt-tether-helper] Removing trust to prevent auto-reconnect..."
+            )
+            trust_result = self._run_cmd(["bluetoothctl", "untrust", mac], capture=True)
+            logging.info(f"[bt-tether-helper] Untrust result: {trust_result}")
+            time.sleep(1)
 
             # Unpair (remove) the device completely
             logging.info(f"[bt-tether-helper] Removing device to unpair...")
             remove_result = self._run_cmd(["bluetoothctl", "remove", mac], capture=True)
             logging.info(f"[bt-tether-helper] Remove result: {remove_result}")
+            time.sleep(1)
+
+            # Block the device to prevent reconnection attempts
+            logging.info(
+                f"[bt-tether-helper] Blocking device to prevent reconnection..."
+            )
+            block_result = self._run_cmd(["bluetoothctl", "block", mac], capture=True)
+            logging.info(f"[bt-tether-helper] Block result: {block_result}")
             time.sleep(1)
 
             logging.info(
@@ -1275,11 +1285,19 @@ default-agent
                     logging.info(
                         f"[bt-tether-helper] Retrying NAP connection (attempt {retry + 1}/3)..."
                     )
+                    with self.lock:
+                        self.message = f"NAP retry {retry + 1}/3..."
                     time.sleep(3)  # Wait for previous connection attempt to settle
 
                 nap_connected = self._connect_nap_dbus(mac)
                 if nap_connected:
                     break
+                else:
+                    logging.warning(
+                        f"[bt-tether-helper] NAP attempt {retry + 1} failed"
+                    )
+                    with self.lock:
+                        self.message = f"NAP attempt {retry + 1}/3 failed..."
 
             if nap_connected:
                 logging.info(f"[bt-tether-helper] NAP connection successful!")
@@ -1292,6 +1310,7 @@ default-agent
                         self.status = "CONNECTED"
                         self.message = f"✓ Connected! Internet via {iface}"
                         self._connection_in_progress = False
+                    self._invalidate_status_cache()
                 else:
                     logging.warning(
                         f"[bt-tether-helper] NAP connected but no interface detected"
@@ -1300,12 +1319,14 @@ default-agent
                         self.status = "CONNECTED"
                         self.message = "Connected but no internet. Enable Bluetooth tethering on phone."
                         self._connection_in_progress = False
+                    self._invalidate_status_cache()
             else:
                 logging.warning(f"[bt-tether-helper] NAP connection failed")
                 with self.lock:
                     self.status = "CONNECTED"
                     self.message = "Bluetooth connected but tethering failed. Enable tethering on phone."
                     self._connection_in_progress = False
+                self._invalidate_status_cache()
 
         except Exception as e:
             logging.error(f"[bt-tether-helper] Connection thread error: {e}")
@@ -1315,6 +1336,8 @@ default-agent
             with self.lock:
                 self.status = "ERROR"
                 self.message = f"Connection error: {str(e)}"
+                self._connection_in_progress = False
+            self._invalidate_status_cache()
         finally:
             # Clear the flag if not already cleared (error cases)
             with self.lock:
@@ -1712,11 +1735,32 @@ default-agent
                 bus.get_object("org.bluez", device_path), "org.bluez.Device1"
             )
 
-            device.ConnectProfile(NAP_UUID)
-            logging.info(
-                f"[bt-tether-helper] ✓ NAP profile connected successfully via DBus"
-            )
-            return True
+            # Set a timeout for the ConnectProfile call to prevent hanging
+            try:
+                device.ConnectProfile(NAP_UUID, timeout=30)
+                logging.info(
+                    f"[bt-tether-helper] ✓ NAP profile connected successfully via DBus"
+                )
+                return True
+            except dbus.exceptions.DBusException as dbus_err:
+                error_msg = str(dbus_err)
+                logging.error(
+                    f"[bt-tether-helper] DBus NAP connection failed: {dbus_err}"
+                )
+
+                # Check for common errors and provide helpful hints
+                if (
+                    "br-connection-create-socket" in error_msg
+                    or "br-connection-profile-unavailable" in error_msg
+                ):
+                    logging.error(
+                        "[bt-tether-helper] ⚠️  Bluetooth tethering is NOT enabled on your phone!"
+                    )
+                    logging.error(
+                        "[bt-tether-helper] ⚠️  Go to Settings → Network & internet → Hotspot & tethering → Enable 'Bluetooth tethering'"
+                    )
+
+                return False
 
         except ImportError as e:
             logging.error(f"[bt-tether-helper] python3-dbus not installed: {e}")
@@ -1727,20 +1771,8 @@ default-agent
         except Exception as e:
             error_msg = str(e)
             logging.error(
-                f"[bt-tether-helper] DBus NAP connection failed: {type(e).__name__}: {e}"
+                f"[bt-tether-helper] NAP connection error: {type(e).__name__}: {e}"
             )
-
-            # Check for common errors and provide helpful hints
-            if (
-                "br-connection-create-socket" in error_msg
-                or "br-connection-profile-unavailable" in error_msg
-            ):
-                logging.error(
-                    "[bt-tether-helper] ⚠️  Bluetooth tethering is NOT enabled on your phone!"
-                )
-                logging.error(
-                    "[bt-tether-helper] ⚠️  Go to Settings → Network & internet → Hotspot & tethering → Enable 'Bluetooth tethering'"
-                )
 
             import traceback
 
