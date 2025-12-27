@@ -80,9 +80,11 @@ When multiple network interfaces are active (e.g., USB and Bluetooth), the web i
 Use the **"Test Internet Connectivity"** button in the web interface to verify your connection:
 
 - **Ping Test**: Verifies IP connectivity to 8.8.8.8
-- **DNS Test**: Tests DNS resolution (nslookup google.com)
+- **DNS Test**: Tests DNS resolution using Python's socket library (resolves google.com)
+- **DNS Servers**: Shows configured DNS servers from /etc/resolv.conf
 - **Interface IP**: Shows the IP address assigned to bnep0
 - **Default Route**: Displays the active routing configuration
+- **Localhost Route**: Verifies localhost (127.0.0.1) routes correctly through loopback interface
 
 This is especially useful for troubleshooting when you have multiple network interfaces active.
 
