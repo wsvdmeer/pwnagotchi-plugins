@@ -104,6 +104,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         </div>
       </div>
       
+      <!-- USB Priority Warning -->
+      <div id="usbWarning" style="display: none; margin-bottom: 12px;">
+        <div class="message-box message-warning">
+          ⚠️ <b>USB Connected</b><br>
+          <small>Internet traffic is using USB (higher priority). Bluetooth tethering is standby.</small>
+        </div>
+      </div>
+      
+      <!-- Active Route Status -->
+      <div id="activeRouteBox" style="display: none; margin-bottom: 12px;">
+        <div style="background: #f5f5f5; padding: 10px; border-radius: 4px; border: 1px solid #ddd;">
+          <div style="color: #666; font-size: 12px; margin-bottom: 4px;">🚦 Active Internet Route:</div>
+          <div id="statusRoute" style="font-weight: bold; font-size: 14px;">Checking...</div>
+        </div>
+      </div>
+      
       <!-- Connection Status -->
       <div style="border-top: 1px solid #ddd; padding-top: 12px;">
         <h4 style="margin: 0 0 8px 0; color: #666; font-size: 14px;">📊 Status</h4>
@@ -112,6 +128,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="status-item" id="statusTrusted">🔐 Trusted: <span>Checking...</span></div>
           <div class="status-item" id="statusConnected">🔵 Connected: <span>Checking...</span></div>
           <div class="status-item" id="statusInternet">🌐 Internet: <span>Checking...</span></div>
+        </div>
+        
+        <!-- Test Internet Connectivity -->
+        <div style="margin-top: 12px;">
+          <button onclick="testInternet()" id="testInternetBtn" style="width: 100%; margin: 0;">
+            🔍 Test Internet Connectivity
+          </button>
+        </div>
+        
+        <!-- Test Results -->
+        <div id="testResults" style="display: none; margin-top: 12px;">
+          <div id="testResultsMessage" class="message-box message-info"></div>
         </div>
       </div>
     </div>
@@ -209,6 +237,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           document.getElementById("statusInternet").innerHTML = 
             `🌐 <b style="color: ${data.pan_active ? '#28a745' : '#6c757d'};">[I]</b> Internet: <b style="color: ${data.pan_active ? '#28a745' : '#dc3545'};">${data.pan_active ? '✓ Active' : '✗ Not Active'}</b>${data.interface ? ` (${data.interface})` : ''}`;
           document.getElementById("statusInternet").className = data.pan_active ? 'status-item status-good' : 'status-item status-bad';
+          
+          // Show active route and USB warning
+          const statusRoute = document.getElementById('statusRoute');
+          const activeRouteBox = document.getElementById('activeRouteBox');
+          const usbWarning = document.getElementById('usbWarning');
+          
+          if (data.default_route_interface) {
+            activeRouteBox.style.display = 'block';
+            const isUsingBluetooth = data.default_route_interface === data.interface;
+            const routeColor = isUsingBluetooth ? '#28a745' : '#856404';
+            statusRoute.innerHTML = `<b style="color: ${routeColor};">${data.default_route_interface}</b>`;
+            statusRoute.style.color = routeColor;
+            
+            // Show USB warning if BT is connected but USB has priority
+            if (data.pan_active && data.default_route_interface !== data.interface && data.default_route_interface.startsWith('usb')) {
+              usbWarning.style.display = 'block';
+            } else {
+              usbWarning.style.display = 'none';
+            }
+          } else {
+            activeRouteBox.style.display = 'none';
+            usbWarning.style.display = 'none';
+          }
           
           // Show/hide connect/disconnect buttons based on connection status
           const connectBtn = document.getElementById('quickConnectBtn');
@@ -373,6 +424,83 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         });
       }
 
+      async function testInternet() {
+        const testBtn = document.getElementById('testInternetBtn');
+        const testResults = document.getElementById('testResults');
+        const testResultsMessage = document.getElementById('testResultsMessage');
+        
+        testBtn.disabled = true;
+        testBtn.innerHTML = '<span class="spinner"></span> Testing...';
+        testResults.style.display = 'block';
+        testResultsMessage.className = 'message-box message-info';
+        testResultsMessage.innerHTML = '<span class="spinner"></span> Running connectivity tests...';
+        
+        try {
+          const response = await fetch('/plugins/bt-tether-helper/test-internet', { method: 'GET' });
+          const data = await response.json();
+          
+          let resultHtml = '<div style="font-family: monospace; font-size: 13px; line-height: 1.6;">';
+          
+          // Ping test
+          resultHtml += `<div style="margin-bottom: 8px;">`;
+          resultHtml += `<b>📡 Ping Test (8.8.8.8):</b> `;
+          resultHtml += data.ping_success ? '<span style="color: #28a745;">✓ Success</span>' : '<span style="color: #dc3545;">✗ Failed</span>';
+          resultHtml += `</div>`;
+          
+          // DNS test
+          resultHtml += `<div style="margin-bottom: 8px;">`;
+          resultHtml += `<b>🔍 DNS Test (google.com):</b> `;
+          resultHtml += data.dns_success ? '<span style="color: #28a745;">✓ Success</span>' : '<span style="color: #dc3545;">✗ Failed</span>';
+          resultHtml += `</div>`;
+          
+          // DNS servers
+          if (data.dns_servers) {
+            resultHtml += `<div style="margin-bottom: 8px; padding-left: 20px; font-size: 12px;">`;
+            resultHtml += `<span style="color: #666;">DNS Servers:</span> <span style="color: #0066cc;">${data.dns_servers}</span>`;
+            resultHtml += `</div>`;
+          }
+          
+          // DNS error details
+          if (!data.dns_success && data.dns_error) {
+            resultHtml += `<div style="margin-bottom: 8px; padding-left: 20px; font-size: 11px; background: #fff3cd; padding: 6px; border-radius: 3px;">`;
+            resultHtml += `<span style="color: #856404;">Error: ${data.dns_error.substring(0, 150)}...</span>`;
+            resultHtml += `</div>`;
+          }
+          
+          // bnep0 IP
+          resultHtml += `<div style="margin-bottom: 8px;">`;
+          resultHtml += `<b>💻 bnep0 IP:</b> `;
+          resultHtml += data.bnep0_ip ? `<span style="color: #28a745;">${data.bnep0_ip}</span>` : '<span style="color: #dc3545;">No IP assigned</span>';
+          resultHtml += `</div>`;
+          
+          // Default route
+          resultHtml += `<div style="margin-bottom: 8px;">`;
+          resultHtml += `<b>🚦 Default Route:</b> `;
+          resultHtml += data.default_route ? `<span style="color: #0066cc;">${data.default_route}</span>` : '<span style="color: #dc3545;">None</span>';
+          resultHtml += `</div>`;
+          
+          resultHtml += '</div>';
+          
+          // Set overall result class
+          if (data.ping_success && data.dns_success) {
+            testResultsMessage.className = 'message-box message-success';
+          } else if (data.ping_success || data.dns_success) {
+            testResultsMessage.className = 'message-box message-warning';
+          } else {
+            testResultsMessage.className = 'message-box message-error';
+          }
+          
+          testResultsMessage.innerHTML = resultHtml;
+          
+        } catch (error) {
+          testResultsMessage.className = 'message-box message-error';
+          testResultsMessage.textContent = 'Test failed: ' + error.message;
+        } finally {
+          testBtn.disabled = false;
+          testBtn.innerHTML = '🔍 Test Internet Connectivity';
+        }
+      }
+
       async function disconnectDevice() {
         const mac = macInput.value.trim();
         if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(mac)) {
@@ -457,7 +585,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.0.0"
+    __version__ = "0.9.0-beta"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -813,6 +941,10 @@ default-agent
                         }
                     )
 
+            if clean_path == "test-internet":
+                result = self._test_internet_connectivity()
+                return jsonify(result)
+
             return "Not Found", 404
         except Exception as e:
             logging.error(f"[bt-tether-helper] Webhook error: {e}")
@@ -1042,9 +1174,12 @@ default-agent
             pan_active = self._pan_active()
             interface = self._get_pan_interface() if pan_active else None
 
+            # Get default route interface
+            default_route_interface = self._get_default_route_interface()
+
             # Only log at debug level to reduce spam
             logging.debug(
-                f"[bt-tether-helper] Full status - Paired: {paired}, Trusted: {trusted}, Connected: {connected}, PAN: {pan_active}, Interface: {interface}"
+                f"[bt-tether-helper] Full status - Paired: {paired}, Trusted: {trusted}, Connected: {connected}, PAN: {pan_active}, Interface: {interface}, Default Route: {default_route_interface}"
             )
             status = {
                 "paired": paired,
@@ -1053,6 +1188,7 @@ default-agent
                 "pan_active": pan_active,
                 "interface": interface,
                 "passkey": self.current_passkey,
+                "default_route_interface": default_route_interface,
             }
 
             # Cache the result
@@ -1306,11 +1442,53 @@ default-agent
                 if self._pan_active():
                     iface = self._get_pan_interface()
                     logging.info(f"[bt-tether-helper] ✓ PAN interface active: {iface}")
+
+                    # Wait for interface initialization
+                    logging.info(
+                        f"[bt-tether-helper] Waiting for interface initialization..."
+                    )
+                    time.sleep(2)
+
+                    # Setup NetworkManager connection
+                    if self._setup_network_manager(mac, iface):
+                        logging.info(
+                            f"[bt-tether-helper] ✓ NetworkManager setup successful"
+                        )
+                    else:
+                        logging.warning(
+                            f"[bt-tether-helper] NetworkManager setup failed, connection may not work"
+                        )
+
+                    # Wait a bit for network to stabilize
+                    time.sleep(2)
+
+                    # Verify internet connectivity
+                    logging.info(
+                        f"[bt-tether-helper] Checking internet connectivity..."
+                    )
                     with self.lock:
-                        self.status = "CONNECTED"
-                        self.message = f"✓ Connected! Internet via {iface}"
-                        self._connection_in_progress = False
-                    self._invalidate_status_cache()
+                        self.message = "Verifying internet connection..."
+
+                    if self._check_internet_connectivity():
+                        logging.info(
+                            f"[bt-tether-helper] ✓ Internet connectivity verified!"
+                        )
+                        with self.lock:
+                            self.status = "CONNECTED"
+                            self.message = f"✓ Connected! Internet via {iface}"
+                            self._connection_in_progress = False
+                        self._invalidate_status_cache()
+                    else:
+                        logging.warning(
+                            f"[bt-tether-helper] No internet connectivity detected"
+                        )
+                        with self.lock:
+                            self.status = "CONNECTED"
+                            self.message = (
+                                f"Connected via {iface} but no internet access"
+                            )
+                            self._connection_in_progress = False
+                        self._invalidate_status_cache()
                 else:
                     logging.warning(
                         f"[bt-tether-helper] NAP connected but no interface detected"
@@ -1459,6 +1637,295 @@ default-agent
                 logging.error(f"[bt-tether-helper] Exception: {e}")
                 return f"Error: {e}"
 
+    def _setup_network_manager(self, mac, iface):
+        """Setup NetworkManager connection for existing bnep0 interface"""
+        try:
+            conn_name = f"BT-Tether-{mac.replace(':', '')}"
+            logging.info(f"[bt-tether-helper] Setting up NetworkManager for {iface}...")
+
+            # Delete existing connection if it exists
+            subprocess.run(
+                ["sudo", "nmcli", "connection", "delete", conn_name],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+            )
+
+            # Create ethernet connection on the existing bnep0 interface
+            logging.info(f"[bt-tether-helper] Creating connection profile...")
+            result = subprocess.run(
+                [
+                    "sudo",
+                    "nmcli",
+                    "connection",
+                    "add",
+                    "type",
+                    "ethernet",
+                    "con-name",
+                    conn_name,
+                    "ifname",
+                    iface,
+                    "autoconnect",
+                    "no",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=10,
+            )
+
+            if result.returncode != 0:
+                logging.error(
+                    f"[bt-tether-helper] Failed to create connection: {result.stderr}"
+                )
+                return False
+
+            # Configure for DHCP
+            logging.info(f"[bt-tether-helper] Configuring DHCP settings...")
+            subprocess.run(
+                [
+                    "sudo",
+                    "nmcli",
+                    "connection",
+                    "modify",
+                    conn_name,
+                    "ipv4.method",
+                    "auto",
+                    "ipv4.dns",
+                    "8.8.8.8 1.1.1.1",
+                    "ipv4.ignore-auto-dns",
+                    "yes",
+                    "ipv4.route-metric",
+                    "50",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=True,
+            )
+
+            # Activate the connection
+            logging.info(f"[bt-tether-helper] Activating connection with DHCP...")
+            result = subprocess.run(
+                ["sudo", "nmcli", "connection", "up", conn_name],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=20,
+            )
+
+            if result.returncode == 0:
+                logging.info(
+                    f"[bt-tether-helper] ✓ NetworkManager connection activated"
+                )
+                return True
+            else:
+                logging.error(f"[bt-tether-helper] Failed to activate: {result.stderr}")
+                return False
+
+        except subprocess.TimeoutExpired:
+            logging.error(f"[bt-tether-helper] NetworkManager setup timed out")
+            return False
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] NetworkManager error: {e}")
+            return False
+
+    def _log_network_config(self, iface):
+        """Log current network configuration for debugging"""
+        try:
+            # Check IP address
+            ip_result = subprocess.run(
+                ["ip", "addr", "show", iface],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            logging.info(
+                f"[bt-tether-helper] Interface {iface} config:\n{ip_result.stdout}"
+            )
+
+            # Check routing table
+            route_result = subprocess.run(
+                ["ip", "route"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            logging.info(f"[bt-tether-helper] Routing table:\n{route_result.stdout}")
+
+            # Check DNS
+            try:
+                with open("/etc/resolv.conf", "r") as f:
+                    dns_config = f.read()
+                    logging.info(f"[bt-tether-helper] DNS config:\n{dns_config}")
+            except:
+                pass
+
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Failed to log network config: {e}")
+
+    def _setup_routing(self, iface):
+        """Setup default route and DNS for internet access"""
+        try:
+            logging.info(f"[bt-tether-helper] Setting up routing for {iface}...")
+
+            # First, request IP via DHCP
+            logging.info(f"[bt-tether-helper] Requesting IP via DHCP on {iface}...")
+            try:
+                # Try dhcpcd first (common on Raspberry Pi)
+                result = subprocess.run(
+                    ["sudo", "dhcpcd", "-n", iface],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=15,
+                )
+                if result.returncode == 0:
+                    logging.info(
+                        f"[bt-tether-helper] DHCP request via dhcpcd successful"
+                    )
+                else:
+                    # Try dhclient as fallback
+                    logging.info(
+                        f"[bt-tether-helper] dhcpcd failed, trying dhclient..."
+                    )
+                    result = subprocess.run(
+                        ["sudo", "dhclient", "-v", iface],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=15,
+                    )
+                    if result.returncode == 0:
+                        logging.info(
+                            f"[bt-tether-helper] DHCP request via dhclient successful"
+                        )
+            except subprocess.TimeoutExpired:
+                logging.warning(f"[bt-tether-helper] DHCP request timed out")
+            except Exception as dhcp_err:
+                logging.warning(f"[bt-tether-helper] DHCP request failed: {dhcp_err}")
+
+            # Wait for IP to be assigned
+            time.sleep(2)
+
+            # Get the gateway from the interface
+            ip_result = subprocess.run(
+                ["ip", "addr", "show", iface],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+
+            # Extract IP and calculate gateway (usually .1 on the subnet)
+            import re
+
+            ip_match = re.search(r"inet (\d+\.\d+\.\d+)\.(\d+)/", ip_result.stdout)
+            if ip_match:
+                subnet = ip_match.group(1)
+                my_ip_last = ip_match.group(2)
+                gateway = f"{subnet}.1"
+                my_ip = f"{subnet}.{my_ip_last}"
+                logging.info(
+                    f"[bt-tether-helper] ✓ IP assigned: {my_ip}, gateway: {gateway}"
+                )
+
+                # Check if default route exists
+                route_check = subprocess.run(
+                    ["ip", "route", "show", "default"],
+                    stdout=subprocess.PIPE,
+                    text=True,
+                    timeout=5,
+                )
+
+                if iface not in route_check.stdout:
+                    logging.info(
+                        f"[bt-tether-helper] Adding default route via {gateway} on {iface}"
+                    )
+                    subprocess.run(
+                        [
+                            "sudo",
+                            "ip",
+                            "route",
+                            "add",
+                            "default",
+                            "via",
+                            gateway,
+                            "dev",
+                            iface,
+                            "metric",
+                            "50",
+                        ],
+                        timeout=5,
+                        check=False,
+                    )
+                else:
+                    logging.info(
+                        f"[bt-tether-helper] Default route via {iface} already exists"
+                    )
+
+            else:
+                logging.warning(
+                    f"[bt-tether-helper] ⚠️  No IPv4 address assigned to {iface}!"
+                )
+                logging.warning(
+                    f"[bt-tether-helper] ⚠️  Make sure Bluetooth tethering is enabled on your phone"
+                )
+
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Routing setup error: {e}")
+
+    def _check_internet_connectivity(self):
+        """Check if internet is accessible by pinging and DNS resolution"""
+        try:
+            # First try ping to Google's DNS (8.8.8.8)
+            logging.info(f"[bt-tether-helper] Testing connectivity to 8.8.8.8...")
+            result = subprocess.run(
+                ["ping", "-c", "2", "-W", "3", "8.8.8.8"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+            )
+
+            if result.returncode == 0:
+                logging.info(f"[bt-tether-helper] ✓ Ping to 8.8.8.8 successful")
+
+                # Also verify DNS resolution works
+                logging.info(f"[bt-tether-helper] Testing DNS resolution...")
+                try:
+                    dns_result = subprocess.run(
+                        ["nslookup", "google.com"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5,
+                    )
+                    if dns_result.returncode == 0:
+                        logging.info(f"[bt-tether-helper] ✓ DNS resolution working")
+                        return True
+                    else:
+                        logging.warning(
+                            f"[bt-tether-helper] DNS resolution failed but ping works"
+                        )
+                        return True  # Ping works, so basic connectivity is there
+                except:
+                    logging.warning(
+                        f"[bt-tether-helper] DNS test failed but ping works"
+                    )
+                    return True  # Ping works, so basic connectivity is there
+            else:
+                logging.warning(f"[bt-tether-helper] Ping to 8.8.8.8 failed")
+                return False
+        except subprocess.TimeoutExpired:
+            logging.warning(
+                f"[bt-tether-helper] Ping timeout - no internet connectivity"
+            )
+            return False
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Internet check error: {e}")
+            return False
+
     def _pan_active(self):
         """Check if Bluetooth PAN interface is active"""
         try:
@@ -1481,6 +1948,154 @@ default-agent
         except Exception as e:
             logging.error(f"[bt-tether-helper] Failed to check PAN: {e}")
             return False
+
+    def _get_default_route_interface(self):
+        """Get the network interface that has the default route (lowest metric)"""
+        try:
+            result = subprocess.check_output(
+                ["ip", "route", "show", "default"], text=True, timeout=5
+            )
+
+            if not result:
+                return None
+
+            # Parse default route lines to find the one with lowest metric
+            # Format: "default via 192.168.1.1 dev eth0 metric 100"
+            import re
+
+            routes = []
+            for line in result.strip().split("\n"):
+                if "default" in line:
+                    # Extract interface name
+                    dev_match = re.search(r"dev\s+(\S+)", line)
+                    if dev_match:
+                        iface = dev_match.group(1)
+
+                        # Extract metric (default to 0 if not specified)
+                        metric_match = re.search(r"metric\s+(\d+)", line)
+                        metric = int(metric_match.group(1)) if metric_match else 0
+
+                        routes.append((iface, metric))
+
+            if not routes:
+                return None
+
+            # Sort by metric (lowest first) and return the interface
+            routes.sort(key=lambda x: x[1])
+            return routes[0][0]
+
+        except Exception as e:
+            logging.debug(f"[bt-tether-helper] Failed to get default route: {e}")
+            return None
+
+    def _test_internet_connectivity(self):
+        """Test internet connectivity and return detailed results"""
+        try:
+            result = {
+                "ping_success": False,
+                "dns_success": False,
+                "bnep0_ip": None,
+                "default_route": None,
+                "dns_servers": None,
+                "dns_error": None,
+            }
+
+            # Test ping to 8.8.8.8
+            try:
+                ping_result = subprocess.run(
+                    ["ping", "-c", "2", "-W", "3", "8.8.8.8"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=5,
+                )
+                result["ping_success"] = ping_result.returncode == 0
+                logging.info(
+                    f"[bt-tether-helper] Ping test: {'Success' if result['ping_success'] else 'Failed'}"
+                )
+            except Exception as e:
+                logging.warning(f"[bt-tether-helper] Ping test error: {e}")
+
+            # Test DNS resolution
+            try:
+                import socket
+                
+                # Try to resolve google.com using Python's socket library
+                socket.gethostbyname("google.com")
+                result["dns_success"] = True
+                logging.info("[bt-tether-helper] DNS test: Success")
+            except socket.gaierror as e:
+                result["dns_success"] = False
+                result["dns_error"] = f"DNS resolution failed: {str(e)}"
+                logging.warning(f"[bt-tether-helper] DNS test failed: {e}")
+            except Exception as e:
+                result["dns_success"] = False
+                result["dns_error"] = str(e)
+                logging.warning(f"[bt-tether-helper] DNS test error: {e}")
+
+            # Get DNS servers from resolv.conf
+            try:
+                with open("/etc/resolv.conf", "r") as f:
+                    resolv_content = f.read()
+                    dns_servers = []
+                    for line in resolv_content.split("\n"):
+                        if line.strip().startswith("nameserver"):
+                            dns_servers.append(line.strip().split()[1])
+                    result["dns_servers"] = (
+                        ", ".join(dns_servers) if dns_servers else "None"
+                    )
+                logging.info(f"[bt-tether-helper] DNS servers: {result['dns_servers']}")
+            except Exception as e:
+                result["dns_servers"] = f"Error: {str(e)[:50]}"
+                logging.warning(f"[bt-tether-helper] Get DNS servers error: {e}")
+
+            # Get bnep0 IP address
+            try:
+                ip_result = subprocess.run(
+                    ["ip", "addr", "show", "bnep0"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=5,
+                )
+                if ip_result.returncode == 0:
+                    import re
+
+                    ip_match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", ip_result.stdout)
+                    if ip_match:
+                        result["bnep0_ip"] = ip_match.group(1)
+                logging.info(f"[bt-tether-helper] bnep0 IP: {result['bnep0_ip']}")
+            except Exception as e:
+                logging.warning(f"[bt-tether-helper] Get bnep0 IP error: {e}")
+
+            # Get default route
+            try:
+                route_result = subprocess.run(
+                    ["ip", "route", "show", "default"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=5,
+                )
+                if route_result.returncode == 0 and route_result.stdout:
+                    result["default_route"] = route_result.stdout.strip()
+                logging.info(
+                    f"[bt-tether-helper] Default route: {result['default_route']}"
+                )
+            except Exception as e:
+                logging.warning(f"[bt-tether-helper] Get default route error: {e}")
+
+            return result
+
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Internet connectivity test error: {e}")
+            return {
+                "ping_success": False,
+                "dns_success": False,
+                "bnep0_ip": None,
+                "default_route": None,
+                "dns_servers": None,
+                "dns_error": str(e),
+            }
 
     def _get_pan_interface(self):
         """Get the name of the Bluetooth PAN interface if it exists"""

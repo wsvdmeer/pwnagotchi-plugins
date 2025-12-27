@@ -2,6 +2,10 @@
 
 A comprehensive Bluetooth tethering plugin that provides guided setup and automatic connection management for sharing your phone's internet connection with your Pwnagotchi.
 
+![bt-tether-helper Web Interface](example.png)
+
+> **🚧 Work in Progress:** This plugin is currently in **beta** and under active development. Features and functionality may change.
+
 > **⚠️ Important:** This plugin has been tested **only on an Android 15 device** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your Android device** for this plugin to work. Compatibility with other Android versions and Pwnagotchi versions has not been tested.
 
 ## Features
@@ -59,6 +63,28 @@ Access the web interface at: `http://<pwnagotchi-ip>:8080/plugins/bt-tether-help
 - **Disconnect**: Safely disconnect from paired device (automatically unpairs)
 - **Scan**: Discover nearby Bluetooth devices
 - **Status**: Real-time connection and internet status
+- **Internet Test**: Test connectivity with detailed diagnostics (ping, DNS, IP, routing)
+- **Active Route Display**: Shows which network interface is handling internet traffic
+
+### Network Priority
+
+When multiple network interfaces are active (e.g., USB and Bluetooth), the web interface displays:
+
+- **Active Route Indicator**: Shows which interface (usb0, bnep0, etc.) is currently handling internet traffic
+- **USB Priority Warning**: Alerts when USB connection has priority over Bluetooth (USB typically has lower route metric)
+
+> **Note:** When USB is connected, internet traffic uses the USB connection by default. Bluetooth tethering remains active as a standby connection and takes over automatically when USB is disconnected.
+
+### Testing Internet Connectivity
+
+Use the **"Test Internet Connectivity"** button in the web interface to verify your connection:
+
+- **Ping Test**: Verifies IP connectivity to 8.8.8.8
+- **DNS Test**: Tests DNS resolution (nslookup google.com)
+- **Interface IP**: Shows the IP address assigned to bnep0
+- **Default Route**: Displays the active routing configuration
+
+This is especially useful for troubleshooting when you have multiple network interfaces active.
 
 ### Connection Process
 
@@ -113,6 +139,8 @@ main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] (opt
 
 - Enable Bluetooth tethering in your phone's settings
 - Check that your phone has an active internet connection (mobile data or WiFi)
+- Use the **"Test Internet Connectivity"** button in the web interface to diagnose the issue
+- Check if USB is connected - if so, USB may be taking priority (see Active Route display)
 - Try disconnecting and reconnecting
 
 ### Bluetooth Service Unresponsive
@@ -155,6 +183,7 @@ The plugin provides REST API endpoints for external control:
 - `GET /plugins/bt-tether-helper/pair-status?mac=XX:XX:XX:XX:XX:XX` - Check pairing status
 - `GET /plugins/bt-tether-helper/connection-status?mac=XX:XX:XX:XX:XX:XX` - Full connection details
 - `GET /plugins/bt-tether-helper/scan` - Scan for devices (30 seconds)
+- `GET /plugins/bt-tether-helper/test-internet` - Test internet connectivity with detailed diagnostics
 
 ## License
 
@@ -166,7 +195,7 @@ GPL3
 
 ## Version
 
-1.0.0
+0.9.0-beta
 
 ## Support
 
