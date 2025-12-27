@@ -479,6 +479,24 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           resultHtml += data.default_route ? `<span style="color: #0066cc;">${data.default_route}</span>` : '<span style="color: #dc3545;">None</span>';
           resultHtml += `</div>`;
           
+          // Localhost route - CRITICAL for bettercap API
+          resultHtml += `<div style="margin-bottom: 8px;">`;
+          resultHtml += `<b>🏠 Localhost Route:</b> `;
+          if (data.localhost_routes) {
+            const isLoopback = data.localhost_routes.includes('lo') || data.localhost_routes.includes('local');
+            const routeColor = isLoopback ? '#28a745' : '#dc3545';
+            const routeIcon = isLoopback ? '✓' : '⚠️';
+            resultHtml += `<span style="color: ${routeColor};">${routeIcon} ${data.localhost_routes}</span>`;
+            if (!isLoopback) {
+              resultHtml += `<div style="margin-top: 4px; padding: 6px; background: #fff3cd; border-radius: 3px; font-size: 11px;">`;
+              resultHtml += `<span style="color: #856404;">⚠️ WARNING: Localhost not routing through 'lo' interface! This may prevent bettercap API from working.</span>`;
+              resultHtml += `</div>`;
+            }
+          } else {
+            resultHtml += '<span style="color: #dc3545;">None</span>';
+          }
+          resultHtml += `</div>`;
+          
           resultHtml += '</div>';
           
           // Set overall result class
@@ -1998,6 +2016,7 @@ default-agent
                 "default_route": None,
                 "dns_servers": None,
                 "dns_error": None,
+                "localhost_routes": None,
             }
 
             # Test ping to 8.8.8.8
@@ -2018,7 +2037,7 @@ default-agent
             # Test DNS resolution
             try:
                 import socket
-                
+
                 # Try to resolve google.com using Python's socket library
                 socket.gethostbyname("google.com")
                 result["dns_success"] = True
@@ -2083,6 +2102,38 @@ default-agent
                 )
             except Exception as e:
                 logging.warning(f"[bt-tether-helper] Get default route error: {e}")
+
+            # Get localhost route - CRITICAL for bettercap API access
+            try:
+                localhost_result = subprocess.run(
+                    ["ip", "route", "get", "127.0.0.1"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=5,
+                )
+                if localhost_result.returncode == 0 and localhost_result.stdout:
+                    result["localhost_routes"] = localhost_result.stdout.strip()
+                    # Localhost should use 'lo' interface
+                    if (
+                        "lo" not in result["localhost_routes"]
+                        and "local" not in result["localhost_routes"]
+                    ):
+                        logging.warning(
+                            f"[bt-tether-helper] ⚠️  WARNING: Localhost not routing through 'lo' interface!"
+                        )
+                        logging.warning(
+                            f"[bt-tether-helper] ⚠️  This may prevent bettercap API from working: {result['localhost_routes']}"
+                        )
+                    else:
+                        logging.info(
+                            f"[bt-tether-helper] Localhost route: {result['localhost_routes']}"
+                        )
+                else:
+                    result["localhost_routes"] = "Error getting localhost route"
+            except Exception as e:
+                result["localhost_routes"] = f"Error: {str(e)}"
+                logging.warning(f"[bt-tether-helper] Get localhost route error: {e}")
 
             return result
 
