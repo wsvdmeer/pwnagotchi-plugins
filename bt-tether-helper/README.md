@@ -13,6 +13,7 @@ A comprehensive Bluetooth tethering plugin that provides guided setup and automa
 - **Web Interface**: User-friendly web UI for managing Bluetooth connections
 - **Automatic Pairing**: Interactive pairing with passkey display and confirmation
 - **Connection Management**: Connect and disconnect devices with one click
+- **Auto-Reconnect**: Automatically detects and reconnects dropped connections
 - **Device Scanning**: Scan for nearby Bluetooth devices to find and copy MAC addresses
 - **Status Display**: Real-time connection status on Pwnagotchi screen
 - **PAN (Personal Area Network) Support**: Automatic network interface configuration
@@ -126,7 +127,20 @@ main.plugins.bt-tether-helper.enabled = true
 main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC address
 main.plugins.bt-tether-helper.show_on_screen = true  # Show status on display (default: true)
 main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] (optional)
+main.plugins.bt-tether-helper.auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
+main.plugins.bt-tether-helper.reconnect_interval = 30  # Check connection every N seconds (default: 30)
 ```
+
+### Auto-Reconnect
+
+The plugin now includes automatic reconnection monitoring:
+
+- **Enabled by default**: The plugin monitors your Bluetooth connection and automatically reconnects if it drops
+- **Configurable interval**: Check connection status every 30 seconds (configurable via `reconnect_interval`)
+- **Smart reconnection**: Only attempts reconnection when device is paired/trusted but disconnected
+- **Non-intrusive**: Won't interfere with manual connection/disconnection operations
+
+To disable auto-reconnect, set `main.plugins.bt-tether-helper.auto_reconnect = false` in your config.
 
 ## Troubleshooting
 

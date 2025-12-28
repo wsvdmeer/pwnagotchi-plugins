@@ -624,6 +624,14 @@ class BTTetherHelper(Plugin):
             "show_on_screen", True
         )  # Enable/disable screen display
 
+        # Auto-reconnect configuration
+        self.auto_reconnect = self.options.get(
+            "auto_reconnect", True
+        )  # Enable automatic reconnection when connection drops
+        self.reconnect_interval = self.options.get(
+            "reconnect_interval", 30
+        )  # Check connection every N seconds
+
         # Cache for status to avoid excessive bluetoothctl polling
         self._status_cache = None
         self._status_cache_time = 0
@@ -634,6 +642,11 @@ class BTTetherHelper(Plugin):
 
         # Flag to indicate when connection/pairing is in progress
         self._connection_in_progress = False
+
+        # Monitoring thread for automatic reconnection
+        self._monitor_thread = None
+        self._monitor_stop = threading.Event()
+        self._last_known_connected = False  # Track if we were previously connected
 
         # Agent tracking for persistent pairing agent
         self.agent_process = None  # Track agent process
@@ -672,6 +685,10 @@ class BTTetherHelper(Plugin):
 
         # Start persistent pairing agent in background
         self._start_pairing_agent()
+
+        # Start connection monitoring thread if auto-reconnect is enabled
+        if self.auto_reconnect and self.phone_mac:
+            self._start_monitoring_thread()
 
         logging.info("[bt-tether-helper] Loaded")
 
@@ -796,6 +813,180 @@ default-agent
 
         except Exception as e:
             logging.error(f"[bt-tether-helper] Failed to start pairing agent: {e}")
+
+    def _start_monitoring_thread(self):
+        """Start background thread to monitor connection and auto-reconnect if dropped"""
+        try:
+            if self._monitor_thread and self._monitor_thread.is_alive():
+                logging.info("[bt-tether-helper] Monitoring thread already running")
+                return
+
+            self._monitor_stop.clear()
+            self._monitor_thread = threading.Thread(
+                target=self._connection_monitor_loop, daemon=True
+            )
+            self._monitor_thread.start()
+            logging.info(
+                f"[bt-tether-helper] Started connection monitoring (interval: {self.reconnect_interval}s)"
+            )
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Failed to start monitoring thread: {e}")
+
+    def _stop_monitoring_thread(self):
+        """Stop the connection monitoring thread"""
+        try:
+            if self._monitor_thread and self._monitor_thread.is_alive():
+                logging.info("[bt-tether-helper] Stopping monitoring thread...")
+                self._monitor_stop.set()
+                self._monitor_thread.join(timeout=5)
+                logging.info("[bt-tether-helper] Monitoring thread stopped")
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Error stopping monitoring thread: {e}")
+
+    def _connection_monitor_loop(self):
+        """Background loop to monitor connection status and reconnect if needed"""
+        logging.info("[bt-tether-helper] Connection monitor started")
+
+        # Wait a bit before starting to monitor to let initial connection settle
+        time.sleep(30)
+
+        while not self._monitor_stop.is_set():
+            try:
+                # Skip monitoring if connection/pairing is already in progress
+                if self._connection_in_progress:
+                    time.sleep(self.reconnect_interval)
+                    continue
+
+                # Check current connection status
+                status = self._get_full_connection_status(self.phone_mac)
+
+                # Detect if connection was dropped (was connected, now not)
+                if self._last_known_connected and not status["connected"]:
+                    logging.warning(
+                        "[bt-tether-helper] Connection dropped! Attempting to reconnect..."
+                    )
+                    with self.lock:
+                        self.status = "RECONNECTING"
+                        self.message = "Connection lost, reconnecting..."
+
+                    # Attempt to reconnect
+                    self._reconnect_device()
+
+                # Update last known state
+                self._last_known_connected = status["connected"]
+
+                # If paired but not connected, try to reconnect (device may have been disconnected manually)
+                if (
+                    status["paired"]
+                    and status["trusted"]
+                    and not status["connected"]
+                    and not self._last_known_connected
+                ):
+                    logging.info(
+                        "[bt-tether-helper] Device is paired/trusted but not connected. Attempting connection..."
+                    )
+                    with self.lock:
+                        self.status = "CONNECTING"
+                        self.message = "Reconnecting to device..."
+
+                    self._reconnect_device()
+
+            except Exception as e:
+                logging.error(f"[bt-tether-helper] Monitor loop error: {e}")
+
+            # Wait for next check
+            time.sleep(self.reconnect_interval)
+
+        logging.info("[bt-tether-helper] Connection monitor stopped")
+
+    def _reconnect_device(self):
+        """Attempt to reconnect to a previously paired device"""
+        try:
+            mac = self.phone_mac
+            if not mac:
+                logging.error(
+                    "[bt-tether-helper] No MAC address configured for reconnection"
+                )
+                return
+
+            # Set flag to prevent concurrent operations
+            self._connection_in_progress = True
+            self._invalidate_status_cache()
+
+            logging.info(f"[bt-tether-helper] Reconnecting to {mac}...")
+
+            # Check if device is blocked
+            devices_output = self._run_cmd(
+                ["bluetoothctl", "devices", "Blocked"], capture=True, timeout=5
+            )
+            if devices_output and devices_output != "Timeout" and mac in devices_output:
+                logging.info(f"[bt-tether-helper] Unblocking device {mac}...")
+                self._run_cmd(["bluetoothctl", "unblock", mac], capture=True)
+                time.sleep(1)
+
+            # Trust the device
+            logging.info(f"[bt-tether-helper] Ensuring device is trusted...")
+            self._run_cmd(["bluetoothctl", "trust", mac], capture=True)
+            time.sleep(1)
+
+            # Try NAP connection (this will also establish Bluetooth connection if needed)
+            logging.info(f"[bt-tether-helper] Attempting NAP connection...")
+            nap_connected = self._connect_nap_dbus(mac)
+
+            if nap_connected:
+                logging.info(f"[bt-tether-helper] ✓ Reconnection successful")
+
+                # Wait for PAN interface
+                time.sleep(2)
+
+                # Check if PAN interface is up
+                if self._pan_active():
+                    iface = self._get_pan_interface()
+                    logging.info(f"[bt-tether-helper] ✓ PAN interface active: {iface}")
+
+                    # Setup NetworkManager connection
+                    if self._setup_network_manager(mac, iface):
+                        logging.info(
+                            f"[bt-tether-helper] ✓ NetworkManager setup successful"
+                        )
+
+                    # Verify internet connectivity
+                    time.sleep(2)
+                    if self._check_internet_connectivity():
+                        logging.info(
+                            f"[bt-tether-helper] ✓ Internet connectivity verified!"
+                        )
+                        with self.lock:
+                            self.status = "CONNECTED"
+                            self.message = f"✓ Reconnected! Internet via {iface}"
+                    else:
+                        logging.warning(
+                            f"[bt-tether-helper] Reconnected but no internet detected"
+                        )
+                        with self.lock:
+                            self.status = "CONNECTED"
+                            self.message = f"Reconnected via {iface} but no internet"
+                else:
+                    logging.warning(
+                        f"[bt-tether-helper] NAP connected but no interface detected"
+                    )
+                    with self.lock:
+                        self.status = "CONNECTED"
+                        self.message = "Reconnected but no PAN interface"
+            else:
+                logging.warning(f"[bt-tether-helper] Reconnection failed")
+                with self.lock:
+                    self.status = "ERROR"
+                    self.message = "Reconnection failed. Will retry later."
+
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Reconnection error: {e}")
+            with self.lock:
+                self.status = "ERROR"
+                self.message = f"Reconnection error: {str(e)[:50]}"
+        finally:
+            self._connection_in_progress = False
+            self._invalidate_status_cache()
 
     def _monitor_agent_log_for_passkey(self, passkey_found_event):
         """Monitor agent log file for passkey display in real-time and auto-confirm"""
