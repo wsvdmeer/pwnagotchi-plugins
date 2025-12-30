@@ -1928,6 +1928,7 @@ default-agent
                         )
 
             # Create ethernet connection on the existing bnep0 interface
+            # Note: Using 'ethernet' type with explicit interface name binding
             logging.info(f"[bt-tether-helper] Creating connection profile...")
             result = subprocess.run(
                 [
@@ -1943,6 +1944,8 @@ default-agent
                     iface,
                     "autoconnect",
                     "no",
+                    "connection.interface-name",
+                    iface,  # Explicitly set interface name
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1987,7 +1990,7 @@ default-agent
             # Activate the connection
             logging.info(f"[bt-tether-helper] Activating connection with DHCP...")
             result = subprocess.run(
-                ["sudo", "nmcli", "connection", "up", conn_name],
+                ["sudo", "nmcli", "connection", "up", conn_name, "ifname", iface],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
