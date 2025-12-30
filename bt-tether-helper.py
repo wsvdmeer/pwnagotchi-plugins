@@ -128,6 +128,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           <div class="status-item" id="statusTrusted">🔐 Trusted: <span>Checking...</span></div>
           <div class="status-item" id="statusConnected">🔵 Connected: <span>Checking...</span></div>
           <div class="status-item" id="statusInternet">🌐 Internet: <span>Checking...</span></div>
+          <div class="status-item" id="statusIP" style="display: none;">🔢 IP Address: <span></span></div>
         </div>
         
         <!-- Test Internet Connectivity -->
@@ -237,6 +238,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           document.getElementById("statusInternet").innerHTML = 
             `🌐 <b style="color: ${data.pan_active ? '#28a745' : '#6c757d'};">[I]</b> Internet: <b style="color: ${data.pan_active ? '#28a745' : '#dc3545'};">${data.pan_active ? '✓ Active' : '✗ Not Active'}</b>${data.interface ? ` (${data.interface})` : ''}`;
           document.getElementById("statusInternet").className = data.pan_active ? 'status-item status-good' : 'status-item status-bad';
+          
+          // Show IP address if available
+          const statusIPElement = document.getElementById('statusIP');
+          if (data.ip_address && data.pan_active) {
+            statusIPElement.style.display = 'block';
+            statusIPElement.innerHTML = `🔢 IP Address: <b style="color: #28a745;">${data.ip_address}</b>`;
+            statusIPElement.className = 'status-item status-good';
+          } else {
+            statusIPElement.style.display = 'none';
+          }
           
           // Show active route and USB warning
           const statusRoute = document.getElementById('statusRoute');
@@ -1390,13 +1401,14 @@ default-agent
             connected = "Connected: yes" in info
             pan_active = self._pan_active()
             interface = self._get_pan_interface() if pan_active else None
+            ip_address = self._get_interface_ip(interface) if interface else None
 
             # Get default route interface
             default_route_interface = self._get_default_route_interface()
 
             # Only log at debug level to reduce spam
             logging.debug(
-                f"[bt-tether-helper] Full status - Paired: {paired}, Trusted: {trusted}, Connected: {connected}, PAN: {pan_active}, Interface: {interface}, Default Route: {default_route_interface}"
+                f"[bt-tether-helper] Full status - Paired: {paired}, Trusted: {trusted}, Connected: {connected}, PAN: {pan_active}, Interface: {interface}, IP: {ip_address}, Default Route: {default_route_interface}"
             )
             status = {
                 "paired": paired,
@@ -1404,6 +1416,7 @@ default-agent
                 "connected": connected,
                 "pan_active": pan_active,
                 "interface": interface,
+                "ip_address": ip_address,
                 "passkey": self.current_passkey,
                 "default_route_interface": default_route_interface,
             }
@@ -1860,13 +1873,59 @@ default-agent
             conn_name = f"BT-Tether-{mac.replace(':', '')}"
             logging.info(f"[bt-tether-helper] Setting up NetworkManager for {iface}...")
 
-            # Delete existing connection if it exists
+            # Delete ALL existing connections for this interface to avoid conflicts
+            logging.info(f"[bt-tether-helper] Cleaning up old connections for {iface}...")
+            
+            # First, delete connection by name if it exists
             subprocess.run(
                 ["sudo", "nmcli", "connection", "delete", conn_name],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=5,
             )
+            
+            # Get all connections on this interface and delete them
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line and ':' in line:
+                        parts = line.split(':')
+                        if len(parts) >= 2 and parts[1] == iface:
+                            old_conn = parts[0]
+                            logging.info(f"[bt-tether-helper] Removing old connection '{old_conn}' from {iface}")
+                            subprocess.run(
+                                ["sudo", "nmcli", "connection", "delete", old_conn],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                timeout=5,
+                            )
+            
+            # Also check for any BT-Tether connections regardless of interface
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "NAME", "connection", "show"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            
+            if result.returncode == 0:
+                for line in result.stdout.strip().split('\n'):
+                    if line and 'BT-Tether' in line:
+                        logging.info(f"[bt-tether-helper] Removing old BT-Tether connection '{line}'")
+                        subprocess.run(
+                            ["sudo", "nmcli", "connection", "delete", line],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            timeout=5,
+                        )
 
             # Create ethernet connection on the existing bnep0 interface
             logging.info(f"[bt-tether-helper] Creating connection profile...")
@@ -1939,6 +1998,25 @@ default-agent
                 logging.info(
                     f"[bt-tether-helper] ✓ NetworkManager connection activated"
                 )
+                
+                # Get and display IP address
+                time.sleep(1)  # Brief wait for IP assignment
+                ip_result = subprocess.run(
+                    ["ip", "-4", "addr", "show", iface],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=5,
+                )
+                
+                if ip_result.returncode == 0:
+                    import re
+                    ip_match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)', ip_result.stdout)
+                    if ip_match:
+                        ip_addr = ip_match.group(1)
+                        logging.info(f"[bt-tether-helper] ✓ {iface} IP address: {ip_addr}")
+                    else:
+                        logging.warning(f"[bt-tether-helper] Could not determine IP address for {iface}")
                 
                 # Verify localhost routing is intact (critical for bettercap API)
                 self._verify_localhost_route()
@@ -2430,6 +2508,24 @@ default-agent
             return None
         except Exception as e:
             logging.error(f"[bt-tether-helper] Failed to get PAN interface: {e}")
+            return None
+
+    def _get_interface_ip(self, iface):
+        """Get IP address of a network interface"""
+        try:
+            import re
+            result = subprocess.check_output(
+                ["ip", "-4", "addr", "show", iface],
+                text=True,
+                timeout=5
+            )
+            # Look for inet address (e.g., "inet 192.168.44.123/24")
+            match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)', result)
+            if match:
+                return match.group(1)
+            return None
+        except Exception as e:
+            logging.debug(f"[bt-tether-helper] Failed to get IP for {iface}: {e}")
             return None
 
     def _get_bluetooth_adapter(self):
