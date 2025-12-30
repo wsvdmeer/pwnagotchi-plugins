@@ -1052,7 +1052,10 @@ default-agent
                                             logging.info(
                                                 "[bt-tether-helper] ✅ Auto-confirming on Pwnagotchi & waiting for phone..."
                                             )
-                                            if self.agent_process.stdin and not self.agent_process.stdin.closed:
+                                            if (
+                                                self.agent_process.stdin
+                                                and not self.agent_process.stdin.closed
+                                            ):
                                                 self.agent_process.stdin.write(b"yes\n")
                                                 self.agent_process.stdin.flush()
                                         except Exception as confirm_err:
@@ -1867,15 +1870,69 @@ default-agent
                 logging.error(f"[bt-tether-helper] Exception: {e}")
                 return f"Error: {e}"
 
+    def _wait_for_nm_device(self, iface, timeout=15):
+        """Wait for NetworkManager to recognize the device"""
+        logging.info(
+            f"[bt-tether-helper] Waiting for NetworkManager to recognize {iface}..."
+        )
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            result = subprocess.run(
+                ["nmcli", "-t", "-f", "DEVICE", "device", "show"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+
+            if result.returncode == 0:
+                devices = [
+                    line.strip() for line in result.stdout.split("\n") if line.strip()
+                ]
+                if iface in devices:
+                    logging.info(f"[bt-tether-helper] ✓ NetworkManager can see {iface}")
+                    return True
+
+            elapsed = int(time.time() - start_time)
+            if elapsed > 0 and elapsed % 3 == 0:
+                logging.info(
+                    f"[bt-tether-helper] Still waiting for NetworkManager... ({elapsed}s)"
+                )
+            time.sleep(1)
+
+        logging.warning(
+            f"[bt-tether-helper] NetworkManager did not recognize {iface} after {timeout}s"
+        )
+        return False
+
     def _setup_network_manager(self, mac, iface):
         """Setup NetworkManager connection for existing bnep0 interface"""
         try:
             conn_name = f"BT-Tether-{mac.replace(':', '')}"
             logging.info(f"[bt-tether-helper] Setting up NetworkManager for {iface}...")
 
+            # Ensure interface is up and wait for NetworkManager to recognize it
+            logging.info(f"[bt-tether-helper] Ensuring {iface} is up...")
+            subprocess.run(
+                ["sudo", "ip", "link", "set", iface, "up"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+            )
+
+            # Wait for NetworkManager to recognize the device
+            if not self._wait_for_nm_device(iface):
+                logging.warning(
+                    f"[bt-tether-helper] NetworkManager cannot see {iface}, using dhclient instead"
+                )
+                return self._setup_dhclient_fallback(iface)
+
             # Delete ALL existing connections for this interface to avoid conflicts
-            logging.info(f"[bt-tether-helper] Cleaning up old connections for {iface}...")
-            
+            logging.info(
+                f"[bt-tether-helper] Cleaning up old connections for {iface}..."
+            )
+
             # First, delete connection by name if it exists
             subprocess.run(
                 ["sudo", "nmcli", "connection", "delete", conn_name],
@@ -1883,7 +1940,7 @@ default-agent
                 stderr=subprocess.PIPE,
                 timeout=5,
             )
-            
+
             # Get all connections on this interface and delete them
             result = subprocess.run(
                 ["nmcli", "-t", "-f", "NAME,DEVICE", "connection", "show", "--active"],
@@ -1892,21 +1949,23 @@ default-agent
                 text=True,
                 timeout=5,
             )
-            
+
             if result.returncode == 0:
-                for line in result.stdout.strip().split('\n'):
-                    if line and ':' in line:
-                        parts = line.split(':')
+                for line in result.stdout.strip().split("\n"):
+                    if line and ":" in line:
+                        parts = line.split(":")
                         if len(parts) >= 2 and parts[1] == iface:
                             old_conn = parts[0]
-                            logging.info(f"[bt-tether-helper] Removing old connection '{old_conn}' from {iface}")
+                            logging.info(
+                                f"[bt-tether-helper] Removing old connection '{old_conn}' from {iface}"
+                            )
                             subprocess.run(
                                 ["sudo", "nmcli", "connection", "delete", old_conn],
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
                                 timeout=5,
                             )
-            
+
             # Also check for any BT-Tether connections regardless of interface
             result = subprocess.run(
                 ["nmcli", "-t", "-f", "NAME", "connection", "show"],
@@ -1915,11 +1974,13 @@ default-agent
                 text=True,
                 timeout=5,
             )
-            
+
             if result.returncode == 0:
-                for line in result.stdout.strip().split('\n'):
-                    if line and 'BT-Tether' in line:
-                        logging.info(f"[bt-tether-helper] Removing old BT-Tether connection '{line}'")
+                for line in result.stdout.strip().split("\n"):
+                    if line and "BT-Tether" in line:
+                        logging.info(
+                            f"[bt-tether-helper] Removing old BT-Tether connection '{line}'"
+                        )
                         subprocess.run(
                             ["sudo", "nmcli", "connection", "delete", line],
                             stdout=subprocess.PIPE,
@@ -2001,7 +2062,7 @@ default-agent
                 logging.info(
                     f"[bt-tether-helper] ✓ NetworkManager connection activated"
                 )
-                
+
                 # Get and display IP address
                 time.sleep(1)  # Brief wait for IP assignment
                 ip_result = subprocess.run(
@@ -2011,30 +2072,157 @@ default-agent
                     text=True,
                     timeout=5,
                 )
-                
+
                 if ip_result.returncode == 0:
                     import re
-                    ip_match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)', ip_result.stdout)
+
+                    ip_match = re.search(
+                        r"inet\s+(\d+\.\d+\.\d+\.\d+)", ip_result.stdout
+                    )
                     if ip_match:
                         ip_addr = ip_match.group(1)
-                        logging.info(f"[bt-tether-helper] ✓ {iface} IP address: {ip_addr}")
+                        logging.info(
+                            f"[bt-tether-helper] ✓ {iface} IP address: {ip_addr}"
+                        )
                     else:
-                        logging.warning(f"[bt-tether-helper] Could not determine IP address for {iface}")
-                
+                        logging.warning(
+                            f"[bt-tether-helper] Could not determine IP address for {iface}"
+                        )
+
                 # Verify localhost routing is intact (critical for bettercap API)
                 self._verify_localhost_route()
-                
+
                 return True
             else:
                 logging.error(f"[bt-tether-helper] Failed to activate: {result.stderr}")
-                return False
+                logging.info(f"[bt-tether-helper] Falling back to dhclient...")
+                return self._setup_dhclient_fallback(iface)
 
         except subprocess.TimeoutExpired:
             logging.error(f"[bt-tether-helper] NetworkManager setup timed out")
-            return False
+            logging.info(f"[bt-tether-helper] Falling back to dhclient...")
+            return self._setup_dhclient_fallback(iface)
         except Exception as e:
             logging.error(f"[bt-tether-helper] NetworkManager error: {e}")
+            logging.info(f"[bt-tether-helper] Falling back to dhclient...")
+            return self._setup_dhclient_fallback(iface)
+
+    def _setup_dhclient_fallback(self, iface):
+        """Fallback method using dhclient directly when NetworkManager fails"""
+        try:
+            logging.info(f"[bt-tether-helper] Setting up {iface} using dhclient...")
+            
+            # Kill any existing dhclient for this interface
+            subprocess.run(
+                ["sudo", "pkill", "-f", f"dhclient.*{iface}"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=3,
+            )
+            time.sleep(0.5)
+            
+            # Ensure interface is up
+            subprocess.run(
+                ["sudo", "ip", "link", "set", iface, "up"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=5,
+            )
+            
+            # Request DHCP lease
+            logging.info(f"[bt-tether-helper] Requesting DHCP lease for {iface}...")
+            result = subprocess.run(
+                ["sudo", "dhclient", "-v", iface],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30,
+            )
+            
+            if result.returncode != 0:
+                logging.warning(f"[bt-tether-helper] dhclient returned {result.returncode}")
+                logging.debug(f"[bt-tether-helper] dhclient stderr: {result.stderr}")
+            
+            # Wait for IP assignment
+            time.sleep(2)
+            
+            # Check if we got an IP
+            ip_result = subprocess.run(
+                ["ip", "-4", "addr", "show", iface],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            
+            if ip_result.returncode == 0:
+                import re
+                ip_match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", ip_result.stdout)
+                if ip_match:
+                    ip_addr = ip_match.group(1)
+                    logging.info(f"[bt-tether-helper] ✓ {iface} IP address: {ip_addr}")
+                    
+                    # Add default route through this interface if none exists
+                    self._setup_default_route(iface)
+                    
+                    # Verify localhost routing
+                    self._verify_localhost_route()
+                    
+                    return True
+                else:
+                    logging.error(f"[bt-tether-helper] No IP address assigned to {iface}")
+                    return False
+            else:
+                logging.error(f"[bt-tether-helper] Failed to check IP for {iface}")
+                return False
+                
+        except subprocess.TimeoutExpired:
+            logging.error(f"[bt-tether-helper] dhclient timed out")
             return False
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] dhclient fallback error: {e}")
+            return False
+
+    def _setup_default_route(self, iface):
+        """Add default route through the tether interface if needed"""
+        try:
+            # Check if default route exists
+            result = subprocess.run(
+                ["ip", "route", "show", "default"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                logging.info(f"[bt-tether-helper] Default route already exists")
+                return
+            
+            # Get the gateway from the interface's network
+            ip_result = subprocess.run(
+                ["ip", "-4", "addr", "show", iface],
+                stdout=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            
+            if ip_result.returncode == 0:
+                import re
+                # Look for gateway in the subnet
+                result = subprocess.run(
+                    ["ip", "route", "show", "dev", iface],
+                    stdout=subprocess.PIPE,
+                    text=True,
+                    timeout=5,
+                )
+                
+                if result.returncode == 0:
+                    # Gateway should be auto-configured via DHCP
+                    logging.info(f"[bt-tether-helper] Route configuration: {result.stdout.strip()}")
+                    
+        except Exception as e:
+            logging.debug(f"[bt-tether-helper] Route setup note: {e}")
 
     def _verify_localhost_route(self):
         """Verify localhost routes correctly through loopback interface (critical for bettercap API)"""
@@ -2046,7 +2234,7 @@ default-agent
                 text=True,
                 timeout=3,
             )
-            
+
             if result.returncode == 0:
                 route_output = result.stdout.strip()
                 # Localhost should use 'lo' interface or 'local' keyword
@@ -2060,7 +2248,7 @@ default-agent
                     logging.info(
                         "[bt-tether-helper] Attempting to fix localhost route..."
                     )
-                    
+
                     # Ensure loopback interface is up
                     subprocess.run(
                         ["sudo", "ip", "link", "set", "lo", "up"],
@@ -2068,7 +2256,7 @@ default-agent
                         stderr=subprocess.DEVNULL,
                         timeout=3,
                     )
-                    
+
                     # Add explicit localhost route if missing
                     subprocess.run(
                         ["sudo", "ip", "route", "add", "127.0.0.0/8", "dev", "lo"],
@@ -2076,7 +2264,7 @@ default-agent
                         stderr=subprocess.DEVNULL,
                         timeout=3,
                     )
-                    
+
                     logging.info(
                         "[bt-tether-helper] ✓ Localhost route protection applied"
                     )
@@ -2085,12 +2273,12 @@ default-agent
                         f"[bt-tether-helper] Localhost route OK: {route_output}"
                     )
             else:
-                logging.warning(
-                    "[bt-tether-helper] Could not verify localhost routing"
-                )
-                
+                logging.warning("[bt-tether-helper] Could not verify localhost routing")
+
         except Exception as e:
-            logging.error(f"[bt-tether-helper] Localhost route verification failed: {e}")
+            logging.error(
+                f"[bt-tether-helper] Localhost route verification failed: {e}"
+            )
 
     def _log_network_config(self, iface):
         """Log current network configuration for debugging - optimized for RPi Zero W2"""
@@ -2298,7 +2486,7 @@ default-agent
                 text=True,
                 timeout=3,  # Reduced timeout for efficiency
             )
-            
+
             # Check for both bnep and bt-pan interfaces
             has_bnep = "bnep" in result.stdout
             has_bt_pan = "bt-pan" in result.stdout
@@ -2517,13 +2705,12 @@ default-agent
         """Get IP address of a network interface"""
         try:
             import re
+
             result = subprocess.check_output(
-                ["ip", "-4", "addr", "show", iface],
-                text=True,
-                timeout=5
+                ["ip", "-4", "addr", "show", iface], text=True, timeout=5
             )
             # Look for inet address (e.g., "inet 192.168.44.123/24")
-            match = re.search(r'inet\s+(\d+\.\d+\.\d+\.\d+)', result)
+            match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", result)
             if match:
                 return match.group(1)
             return None
