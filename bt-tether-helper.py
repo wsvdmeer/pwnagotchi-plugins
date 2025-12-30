@@ -629,13 +629,13 @@ class BTTetherHelper(Plugin):
             "auto_reconnect", True
         )  # Enable automatic reconnection when connection drops
         self.reconnect_interval = self.options.get(
-            "reconnect_interval", 30
-        )  # Check connection every N seconds
+            "reconnect_interval", 60
+        )  # Check connection every N seconds (increased for RPi Zero W2)
 
         # Cache for status to avoid excessive bluetoothctl polling
         self._status_cache = None
         self._status_cache_time = 0
-        self._status_cache_ttl = 5  # Cache status for 5 seconds (faster screen updates)
+        self._status_cache_ttl = 15  # Cache status for 15s (RPi Zero W2 optimization)
 
         # Lock to prevent multiple bluetoothctl commands from running simultaneously
         self._bluetoothctl_lock = threading.Lock()
@@ -674,14 +674,20 @@ class BTTetherHelper(Plugin):
                 ["systemctl", "restart", "bluetooth"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=10,
+                timeout=5,  # Reduced timeout for RPi Zero W2
             )
-            time.sleep(2)  # Give service time to start
+            time.sleep(3)  # Give service extra time to start on slow hardware
             logging.info("[bt-tether-helper] Bluetooth service restarted")
         except Exception as e:
             logging.warning(
                 f"[bt-tether-helper] Failed to restart Bluetooth service: {e}"
             )
+
+        # Verify localhost routing is intact (critical for bettercap API)
+        try:
+            self._verify_localhost_route()
+        except Exception as e:
+            logging.warning(f"[bt-tether-helper] Initial localhost check failed: {e}")
 
         # Start persistent pairing agent in background
         self._start_pairing_agent()
@@ -803,6 +809,7 @@ default-agent
             # Send commands to bluetoothctl
             self.agent_process.stdin.write(agent_commands.encode())
             self.agent_process.stdin.flush()
+            self.agent_process.stdin.close()  # Close stdin after sending (prevent stdin deadlock)
 
             logging.info(
                 "[bt-tether-helper] ✓ Persistent pairing agent started (KeyboardDisplay mode - passkey will be shown)"
@@ -1034,8 +1041,9 @@ default-agent
                                             logging.info(
                                                 "[bt-tether-helper] ✅ Auto-confirming on Pwnagotchi & waiting for phone..."
                                             )
-                                            self.agent_process.stdin.write(b"yes\n")
-                                            self.agent_process.stdin.flush()
+                                            if self.agent_process.stdin and not self.agent_process.stdin.closed:
+                                                self.agent_process.stdin.write(b"yes\n")
+                                                self.agent_process.stdin.flush()
                                         except Exception as confirm_err:
                                             logging.error(
                                                 f"[bt-tether-helper] Failed to auto-confirm: {confirm_err}"
@@ -1788,9 +1796,9 @@ default-agent
                     ["systemctl", "restart", "bluetooth"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=10,
+                    timeout=5,  # Reduced timeout for RPi Zero W2
                 )
-                time.sleep(2)
+                time.sleep(3)  # Extra time on slow hardware
                 logging.info("[bt-tether-helper] Bluetooth service restarted")
                 return True
             except Exception as e:
@@ -1889,7 +1897,7 @@ default-agent
                 )
                 return False
 
-            # Configure for DHCP
+            # Configure for DHCP with safeguards to avoid interfering with local services
             logging.info(f"[bt-tether-helper] Configuring DHCP settings...")
             subprocess.run(
                 [
@@ -1905,7 +1913,11 @@ default-agent
                     "ipv4.ignore-auto-dns",
                     "yes",
                     "ipv4.route-metric",
-                    "50",
+                    "100",  # Higher metric to avoid overriding local routes (bettercap API protection)
+                    "ipv4.never-default",
+                    "no",  # Allow as default route but with high metric
+                    "connection.autoconnect-slaves",
+                    "no",  # Don't interfere with other interfaces
                 ],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1927,6 +1939,10 @@ default-agent
                 logging.info(
                     f"[bt-tether-helper] ✓ NetworkManager connection activated"
                 )
+                
+                # Verify localhost routing is intact (critical for bettercap API)
+                self._verify_localhost_route()
+                
                 return True
             else:
                 logging.error(f"[bt-tether-helper] Failed to activate: {result.stderr}")
@@ -1939,8 +1955,64 @@ default-agent
             logging.error(f"[bt-tether-helper] NetworkManager error: {e}")
             return False
 
+    def _verify_localhost_route(self):
+        """Verify localhost routes correctly through loopback interface (critical for bettercap API)"""
+        try:
+            # Check localhost routing
+            result = subprocess.run(
+                ["ip", "route", "get", "127.0.0.1"],
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+            
+            if result.returncode == 0:
+                route_output = result.stdout.strip()
+                # Localhost should use 'lo' interface or 'local' keyword
+                if "lo" not in route_output and "local" not in route_output:
+                    logging.warning(
+                        f"[bt-tether-helper] ⚠️  Localhost routing misconfigured: {route_output}"
+                    )
+                    logging.warning(
+                        "[bt-tether-helper] ⚠️  This may prevent bettercap API from working!"
+                    )
+                    logging.info(
+                        "[bt-tether-helper] Attempting to fix localhost route..."
+                    )
+                    
+                    # Ensure loopback interface is up
+                    subprocess.run(
+                        ["sudo", "ip", "link", "set", "lo", "up"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3,
+                    )
+                    
+                    # Add explicit localhost route if missing
+                    subprocess.run(
+                        ["sudo", "ip", "route", "add", "127.0.0.0/8", "dev", "lo"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3,
+                    )
+                    
+                    logging.info(
+                        "[bt-tether-helper] ✓ Localhost route protection applied"
+                    )
+                else:
+                    logging.debug(
+                        f"[bt-tether-helper] Localhost route OK: {route_output}"
+                    )
+            else:
+                logging.warning(
+                    "[bt-tether-helper] Could not verify localhost routing"
+                )
+                
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Localhost route verification failed: {e}")
+
     def _log_network_config(self, iface):
-        """Log current network configuration for debugging"""
+        """Log current network configuration for debugging - optimized for RPi Zero W2"""
         try:
             # Check IP address
             ip_result = subprocess.run(
@@ -1950,7 +2022,7 @@ default-agent
                 text=True,
                 timeout=5,
             )
-            logging.info(
+            logging.debug(  # Use debug level to reduce log spam on limited storage
                 f"[bt-tether-helper] Interface {iface} config:\n{ip_result.stdout}"
             )
 
@@ -1962,13 +2034,13 @@ default-agent
                 text=True,
                 timeout=5,
             )
-            logging.info(f"[bt-tether-helper] Routing table:\n{route_result.stdout}")
+            logging.debug(f"[bt-tether-helper] Routing table:\n{route_result.stdout}")
 
             # Check DNS
             try:
                 with open("/etc/resolv.conf", "r") as f:
                     dns_config = f.read()
-                    logging.info(f"[bt-tether-helper] DNS config:\n{dns_config}")
+                    logging.debug(f"[bt-tether-helper] DNS config:\n{dns_config}")
             except:
                 pass
 
@@ -2065,7 +2137,7 @@ default-agent
                             "dev",
                             iface,
                             "metric",
-                            "50",
+                            "100",  # Higher metric to avoid overriding local routes (bettercap API protection)
                         ],
                         timeout=5,
                         check=False,
@@ -2136,15 +2208,19 @@ default-agent
             return False
 
     def _pan_active(self):
-        """Check if Bluetooth PAN interface is active"""
+        """Check if any PAN interface (bnep/bt-pan) is active - optimized for RPi Zero W2"""
         try:
-            out = subprocess.check_output(["ip", "a"], text=True, timeout=5)
-            # Only log detailed interface info at debug level to reduce log clutter
-            logging.debug(f"[bt-tether-helper] Network interfaces:\n{out}")
-
+            # More efficient: use ip link show instead of full ip a output
+            result = subprocess.run(
+                ["ip", "link", "show"],
+                capture_output=True,
+                text=True,
+                timeout=3,  # Reduced timeout for efficiency
+            )
+            
             # Check for both bnep and bt-pan interfaces
-            has_bnep = "bnep" in out
-            has_bt_pan = "bt-pan" in out
+            has_bnep = "bnep" in result.stdout
+            has_bt_pan = "bt-pan" in result.stdout
 
             if has_bnep or has_bt_pan:
                 logging.debug(

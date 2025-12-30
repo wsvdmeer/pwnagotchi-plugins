@@ -2,11 +2,21 @@
 
 A comprehensive Bluetooth tethering plugin that provides guided setup and automatic connection management for sharing your phone's internet connection with your Pwnagotchi.
 
-![bt-tether-helper Web Interface](example.png)
+![bt-tether-helper Web Interface](ui.png)
 
 > **🚧 Work in Progress:** This plugin is currently in **beta** and under active development. Features and functionality may change.
 
 > **⚠️ Important:** This plugin has been tested **only on an Android 15 device** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your Android device** for this plugin to work. Compatibility with other Android versions and Pwnagotchi versions has not been tested.
+
+## Tested Hardware Configuration
+
+**Development & Testing:**
+
+- **Device:** Raspberry Pi Zero 2WH
+- **Display:** Waveshare 2.13-inch e-ink display (with built-in RTC chip and battery)
+- **Power Management:** Waveshare UPS HAT (C)
+
+_Optimizations have been applied for RPi Zero W2's resource constraints (512MB RAM, 1GB storage, slower CPU)._
 
 ## Features
 
