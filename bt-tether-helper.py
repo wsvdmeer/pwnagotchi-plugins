@@ -1895,7 +1895,7 @@ default-agent
         """Setup DHCP for bnep0 interface"""
         try:
             logging.info(f"[bt-tether-helper] Setting up DHCP for {iface}...")
-            
+
             # Verify the interface exists
             check_iface = subprocess.run(
                 ["ip", "link", "show", iface],
@@ -1908,16 +1908,18 @@ default-agent
                 logging.error(f"[bt-tether-helper] Interface {iface} does not exist!")
                 return False
             logging.info(f"[bt-tether-helper] ✓ Verified interface {iface} exists")
-            
+
             # Tell NetworkManager to not manage this interface
-            logging.info(f"[bt-tether-helper] Unmanaging {iface} from NetworkManager...")
+            logging.info(
+                f"[bt-tether-helper] Unmanaging {iface} from NetworkManager..."
+            )
             subprocess.run(
                 ["sudo", "nmcli", "device", "set", iface, "managed", "no"],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=5,
             )
-            
+
             # Bring interface up
             logging.info(f"[bt-tether-helper] Bringing up interface...")
             subprocess.run(
@@ -1926,7 +1928,7 @@ default-agent
                 stderr=subprocess.PIPE,
                 timeout=5,
             )
-            
+
             # Use dhclient to get IP via DHCP
             logging.info(f"[bt-tether-helper] Requesting IP via DHCP...")
             dhcp_result = subprocess.run(
@@ -1936,9 +1938,11 @@ default-agent
                 text=True,
                 timeout=15,
             )
-            
+
             if dhcp_result.returncode != 0:
-                logging.warning(f"[bt-tether-helper] DHCP request failed: {dhcp_result.stderr}")
+                logging.warning(
+                    f"[bt-tether-helper] DHCP request failed: {dhcp_result.stderr}"
+                )
                 # Try alternative dhcp client
                 subprocess.run(
                     ["sudo", "udhcpc", "-i", iface],
@@ -1946,10 +1950,10 @@ default-agent
                     stderr=subprocess.PIPE,
                     timeout=15,
                 )
-            
+
             # Wait for IP assignment
             time.sleep(2)
-            
+
             # Verify IP was assigned
             verify_result = subprocess.run(
                 ["ip", "addr", "show", iface],
@@ -1958,17 +1962,20 @@ default-agent
                 text=True,
                 timeout=5,
             )
-            
+
             if verify_result.returncode == 0:
                 import re
+
                 ip_match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", verify_result.stdout)
                 if ip_match:
                     assigned_ip = ip_match.group(1)
-                    logging.info(f"[bt-tether-helper] ✓ DHCP assigned IP: {assigned_ip}")
+                    logging.info(
+                        f"[bt-tether-helper] ✓ DHCP assigned IP: {assigned_ip}"
+                    )
                 else:
                     logging.warning(f"[bt-tether-helper] No IP assigned via DHCP")
                     return False
-            
+
             # Get the gateway
             route_result = subprocess.run(
                 ["ip", "route", "show", "dev", iface],
@@ -1977,14 +1984,17 @@ default-agent
                 text=True,
                 timeout=5,
             )
-            
+
             if route_result.returncode == 0:
                 import re
-                gateway_match = re.search(r"default via (\d+\.\d+\.\d+\.\d+)", route_result.stdout)
+
+                gateway_match = re.search(
+                    r"default via (\d+\.\d+\.\d+\.\d+)", route_result.stdout
+                )
                 if gateway_match:
                     gateway = gateway_match.group(1)
                     logging.info(f"[bt-tether-helper] ✓ Gateway: {gateway}")
-                    
+
                     # Test gateway reachability
                     gateway_test = subprocess.run(
                         ["ping", "-c", "1", "-W", "2", gateway],
@@ -1992,18 +2002,22 @@ default-agent
                         stderr=subprocess.PIPE,
                         timeout=5,
                     )
-                    
+
                     if gateway_test.returncode == 0:
-                        logging.info(f"[bt-tether-helper] ✓ Gateway {gateway} is reachable")
+                        logging.info(
+                            f"[bt-tether-helper] ✓ Gateway {gateway} is reachable"
+                        )
                     else:
-                        logging.warning(f"[bt-tether-helper] ⚠️  Gateway {gateway} is not responding")
-            
+                        logging.warning(
+                            f"[bt-tether-helper] ⚠️  Gateway {gateway} is not responding"
+                        )
+
             # Verify localhost routing
             self._verify_localhost_route()
-            
+
             logging.info(f"[bt-tether-helper] ✓ DHCP network configuration complete")
             return True
-            
+
         except Exception as e:
             logging.error(f"[bt-tether-helper] DHCP setup failed: {e}")
             return False
@@ -2168,9 +2182,11 @@ default-agent
                 logging.warning(
                     f"[bt-tether-helper] Make sure Bluetooth tethering is enabled on your phone"
                 )
-                
+
                 # Try to detect if there's another device on the network
-                logging.info(f"[bt-tether-helper] Checking for other devices on network...")
+                logging.info(
+                    f"[bt-tether-helper] Checking for other devices on network..."
+                )
                 arp_scan = subprocess.run(
                     ["ip", "neigh", "show", "dev", iface],
                     stdout=subprocess.PIPE,
@@ -2179,9 +2195,13 @@ default-agent
                     timeout=5,
                 )
                 if arp_scan.returncode == 0 and arp_scan.stdout.strip():
-                    logging.info(f"[bt-tether-helper] Network neighbors: {arp_scan.stdout.strip()}")
+                    logging.info(
+                        f"[bt-tether-helper] Network neighbors: {arp_scan.stdout.strip()}"
+                    )
                 else:
-                    logging.info(f"[bt-tether-helper] No other devices detected on {iface}")
+                    logging.info(
+                        f"[bt-tether-helper] No other devices detected on {iface}"
+                    )
 
             # Verify localhost routing is intact (critical for bettercap API)
             self._verify_localhost_route()
