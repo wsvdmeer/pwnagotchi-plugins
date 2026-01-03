@@ -748,6 +748,15 @@ class BTTetherHelper(Plugin):
         if self.auto_reconnect and self.phone_mac:
             self._start_monitoring_thread()
 
+        # BLE advertising setup
+        self.ble_enabled = self.options.get("ble_broadcast", True)
+        self._ble_thread = None
+        self._ble_stop = threading.Event()
+
+        # Start BLE IP broadcasting if enabled
+        if self.ble_enabled:
+            self._start_ble_broadcast()
+
         self._log("INFO", "Plugin loaded and initialized")
 
     def _log(self, level, message):
@@ -3262,3 +3271,92 @@ default-agent
 
             logging.error(f"[bt-tether-helper] Traceback: {traceback.format_exc()}")
             return False
+
+    def _start_ble_broadcast(self):
+        """Start BLE advertising thread to broadcast IP address"""
+        try:
+            if self._ble_thread and self._ble_thread.is_alive():
+                self._log("INFO", "BLE broadcast thread already running")
+                return
+
+            self._ble_stop.clear()
+            self._ble_thread = threading.Thread(
+                target=self._ble_broadcast_loop, daemon=True
+            )
+            self._ble_thread.start()
+            self._log("INFO", "Started BLE IP broadcasting")
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Failed to start BLE broadcast: {e}")
+
+    def _stop_ble_broadcast(self):
+        """Stop the BLE broadcasting thread"""
+        try:
+            if self._ble_thread and self._ble_thread.is_alive():
+                logging.info("[bt-tether-helper] Stopping BLE broadcast thread...")
+                self._ble_stop.set()
+                self._ble_thread.join(timeout=5)
+                logging.info("[bt-tether-helper] BLE broadcast thread stopped")
+        except Exception as e:
+            logging.error(f"[bt-tether-helper] Error stopping BLE broadcast: {e}")
+
+    def _ble_broadcast_loop(self):
+        """Background loop to advertise IP address via BLE"""
+        logging.info("[bt-tether-helper] BLE broadcast loop started")
+
+        # Wait a bit before starting to let system settle
+        time.sleep(10)
+
+        while not self._ble_stop.is_set():
+            try:
+                # Get current status and IP
+                status = (
+                    self._get_full_connection_status(self.phone_mac)
+                    if self.phone_mac
+                    else {}
+                )
+                ip_address = status.get("ip_address", "0.0.0.0")
+
+                # Update BLE advertisement with current IP
+                self._update_ble_advertisement(ip_address)
+
+            except Exception as e:
+                logging.error(f"[bt-tether-helper] BLE broadcast loop error: {e}")
+
+            # Update every 30 seconds
+            time.sleep(30)
+
+        logging.info("[bt-tether-helper] BLE broadcast loop stopped")
+
+    def _update_ble_advertisement(self, ip_address):
+        """Update BLE advertisement with current IP address using bluetoothctl"""
+        try:
+            # Stop any existing advertisement
+            subprocess.run(
+                ["bluetoothctl", "advertise", "off"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+            time.sleep(0.5)
+
+            # Set device name with IP embedded
+            device_name = f"Pwn-{ip_address.replace('.', '-')}"
+            subprocess.run(
+                ["bluetoothctl", "system-alias", device_name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+
+            # Start advertising with peripheral mode
+            subprocess.run(
+                ["bluetoothctl", "advertise", "peripheral"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=2,
+            )
+
+            logging.debug(f"[bt-tether-helper] BLE advertising IP: {ip_address}")
+
+        except Exception as e:
+            logging.debug(f"[bt-tether-helper] BLE advertisement update error: {e}")

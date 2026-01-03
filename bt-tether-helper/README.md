@@ -27,6 +27,7 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 - **Device Scanning**: Scan for nearby Bluetooth devices to find and copy MAC addresses
 - **Status Display**: Real-time connection status on Pwnagotchi screen
 - **PAN (Personal Area Network) Support**: Automatic network interface configuration
+- **🆕 BLE IP Broadcasting**: Broadcasts IP address via Bluetooth Low Energy for easy discovery
 
 ## Installation
 
@@ -55,6 +56,7 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
    main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC
    main.plugins.bt-tether-helper.show_on_screen = true  # Optional: show status on display
    main.plugins.bt-tether-helper.position = [200, 0]  # Optional: custom position [x, y]
+   main.plugins.bt-tether-helper.ble_broadcast = true  # Optional: enable BLE IP broadcasting (default: true)
    ```
 
 5. Restart Pwnagotchi:
@@ -99,6 +101,36 @@ Use the **"Test Internet Connectivity"** button in the web interface to verify y
 
 This is especially useful for troubleshooting when you have multiple network interfaces active.
 
+### 🆕 BLE IP Broadcasting & Web Finder
+
+The plugin now broadcasts your Pwnagotchi's IP address via Bluetooth Low Energy (BLE), making it easy to find your device's IP without needing to access the web interface first.
+
+**How it works:**
+
+- The plugin encodes the IP address in the Bluetooth device name (e.g., `Pwn-192-168-1-123`)
+- A companion web app uses Web Bluetooth API to scan and retrieve the IP
+
+**Web Bluetooth IP Finder:**
+
+- Visit the hosted web app (see [Web Bluetooth IP Finder](../web-bluetooth-ip-finder/))
+- Click "Scan for Devices"
+- Select your Pwnagotchi from the list
+- Copy the IP address with one click!
+
+**Requirements:**
+
+- Chrome, Edge, or Opera browser (Web Bluetooth API support)
+- Pwnagotchi must be powered on and within Bluetooth range
+- BLE broadcasting must be enabled (enabled by default)
+
+**Configuration:**
+
+```toml
+main.plugins.bt-tether-helper.ble_broadcast = true  # Enable BLE IP broadcasting (default: true)
+```
+
+For complete setup instructions, see [SETUP_GUIDE.md](../SETUP_GUIDE.md)
+
 ### Connection Process
 
 1. **Enable Bluetooth Tethering on Your Android Phone:**
@@ -138,7 +170,8 @@ main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone'
 main.plugins.bt-tether-helper.show_on_screen = true  # Show status on display (default: true)
 main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] (optional)
 main.plugins.bt-tether-helper.auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
-main.plugins.bt-tether-helper.reconnect_interval = 30  # Check connection every N seconds (default: 30)
+main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every N seconds (default: 60)
+main.plugins.bt-tether-helper.ble_broadcast = true  # Enable BLE IP broadcasting (default: true)
 ```
 
 ### Auto-Reconnect

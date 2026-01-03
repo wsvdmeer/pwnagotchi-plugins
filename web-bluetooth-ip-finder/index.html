@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pwnagotchi IP Finder - Web Bluetooth</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          Oxygen, Ubuntu, Cantarell, sans-serif;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+      }
+
+      .container {
+        max-width: 600px;
+        width: 100%;
+        background: white;
+        border-radius: 20px;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        overflow: hidden;
+      }
+
+      .header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 30px;
+        color: white;
+        text-align: center;
+      }
+
+      .header h1 {
+        font-size: 28px;
+        margin-bottom: 10px;
+        font-weight: 600;
+      }
+
+      .header p {
+        opacity: 0.9;
+        font-size: 14px;
+      }
+
+      .content {
+        padding: 30px;
+      }
+
+      .card {
+        background: #f8f9fa;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+      }
+
+      .card h2 {
+        font-size: 18px;
+        margin-bottom: 15px;
+        color: #333;
+      }
+
+      .btn {
+        width: 100%;
+        padding: 15px;
+        font-size: 16px;
+        font-weight: 600;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        color: white;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+      }
+
+      .btn:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+      }
+
+      .btn:active {
+        transform: translateY(0);
+      }
+
+      .btn:disabled {
+        background: #ccc;
+        cursor: not-allowed;
+        box-shadow: none;
+        transform: none;
+      }
+
+      .status {
+        padding: 15px;
+        border-radius: 10px;
+        margin-bottom: 20px;
+        font-weight: 500;
+      }
+
+      .status.info {
+        background: #e3f2fd;
+        color: #1976d2;
+        border-left: 4px solid #1976d2;
+      }
+
+      .status.success {
+        background: #e8f5e9;
+        color: #2e7d32;
+        border-left: 4px solid #4caf50;
+      }
+
+      .status.error {
+        background: #ffebee;
+        color: #c62828;
+        border-left: 4px solid #f44336;
+      }
+
+      .status.warning {
+        background: #fff3e0;
+        color: #e65100;
+        border-left: 4px solid #ff9800;
+      }
+
+      .ip-display {
+        background: #1a1a2e;
+        color: #0ff;
+        padding: 20px;
+        border-radius: 10px;
+        font-family: "Courier New", monospace;
+        font-size: 24px;
+        text-align: center;
+        margin-bottom: 15px;
+        box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.5);
+        letter-spacing: 2px;
+      }
+
+      .device-info {
+        background: #f8f9fa;
+        padding: 15px;
+        border-radius: 10px;
+        margin-top: 15px;
+      }
+
+      .device-info-item {
+        display: flex;
+        justify-content: space-between;
+        padding: 10px 0;
+        border-bottom: 1px solid #e0e0e0;
+      }
+
+      .device-info-item:last-child {
+        border-bottom: none;
+      }
+
+      .device-info-item .label {
+        font-weight: 600;
+        color: #666;
+      }
+
+      .device-info-item .value {
+        color: #333;
+        font-family: "Courier New", monospace;
+      }
+
+      .spinner {
+        display: inline-block;
+        width: 20px;
+        height: 20px;
+        border: 3px solid rgba(255, 255, 255, 0.3);
+        border-radius: 50%;
+        border-top-color: white;
+        animation: spin 1s ease-in-out infinite;
+        margin-right: 10px;
+        vertical-align: middle;
+      }
+
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      .footer {
+        padding: 20px;
+        text-align: center;
+        color: #666;
+        font-size: 12px;
+        border-top: 1px solid #e0e0e0;
+      }
+
+      .footer a {
+        color: #667eea;
+        text-decoration: none;
+      }
+
+      .footer a:hover {
+        text-decoration: underline;
+      }
+
+      .icon {
+        font-size: 48px;
+        margin-bottom: 15px;
+      }
+
+      .help-text {
+        background: #fff3cd;
+        border: 1px solid #ffc107;
+        border-radius: 8px;
+        padding: 12px;
+        margin-top: 15px;
+        font-size: 13px;
+        color: #856404;
+      }
+
+      .help-text strong {
+        display: block;
+        margin-bottom: 5px;
+      }
+
+      #devicesList {
+        max-height: 300px;
+        overflow-y: auto;
+      }
+
+      .device-item {
+        background: white;
+        padding: 15px;
+        margin-bottom: 10px;
+        border-radius: 8px;
+        cursor: pointer;
+        border: 2px solid transparent;
+        transition: all 0.2s ease;
+      }
+
+      .device-item:hover {
+        border-color: #667eea;
+        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
+      }
+
+      .device-item .device-name {
+        font-weight: 600;
+        color: #333;
+        margin-bottom: 5px;
+      }
+
+      .device-item .device-id {
+        font-size: 12px;
+        color: #888;
+        font-family: "Courier New", monospace;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <div class="icon">📡</div>
+        <h1>Pwnagotchi IP Finder</h1>
+        <p>Find your Pwnagotchi's IP address via Bluetooth</p>
+      </div>
+
+      <div class="content">
+        <!-- Browser Check -->
+        <div id="browserCheck" class="status warning">
+          <strong>⚠️ Checking browser compatibility...</strong>
+        </div>
+
+        <!-- Scan Button -->
+        <div class="card">
+          <h2>🔍 Scan for Pwnagotchi</h2>
+          <button id="scanBtn" class="btn" disabled>
+            <span class="spinner" style="display: none"></span>
+            <span id="scanBtnText">Scan for Devices</span>
+          </button>
+          <div class="help-text">
+            <strong>📝 Requirements:</strong>
+            • Your Pwnagotchi must be powered on<br />
+            • Bluetooth tethering must be configured<br />
+            • This only works in Chrome, Edge, or Opera browsers
+          </div>
+        </div>
+
+        <!-- Status Messages -->
+        <div id="statusMessage" style="display: none"></div>
+
+        <!-- Devices List -->
+        <div id="devicesContainer" style="display: none" class="card">
+          <h2>📱 Available Devices</h2>
+          <div id="devicesList"></div>
+        </div>
+
+        <!-- IP Display -->
+        <div id="ipContainer" style="display: none" class="card">
+          <h2>✅ IP Address Found</h2>
+          <div class="ip-display" id="ipAddress">Retrieving...</div>
+          <button id="copyBtn" class="btn">📋 Copy IP Address</button>
+
+          <div class="device-info" id="deviceInfo" style="display: none">
+            <div class="device-info-item">
+              <span class="label">Device Name:</span>
+              <span class="value" id="deviceName">-</span>
+            </div>
+            <div class="device-info-item">
+              <span class="label">Device ID:</span>
+              <span class="value" id="deviceId">-</span>
+            </div>
+            <div class="device-info-item">
+              <span class="label">Connected:</span>
+              <span class="value" id="deviceConnected">-</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="footer">
+        Made for
+        <a href="https://pwnagotchi.ai/" target="_blank">Pwnagotchi</a> with
+        ❤️<br />
+        <a href="https://github.com" target="_blank">View on GitHub</a>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
