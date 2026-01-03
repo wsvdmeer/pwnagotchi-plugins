@@ -657,7 +657,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "0.9.0-beta"
+    __version__ = "0.9.5-beta"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
