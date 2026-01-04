@@ -6,7 +6,7 @@ A comprehensive Bluetooth tethering plugin that provides guided setup and automa
 
 > **🚧 Work in Progress:** This plugin is currently in **beta** and under active development. Features and functionality may change.
 
-> **⚠️ Important:** This plugin has been tested **only on an Android 15 device** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your Android device** for this plugin to work. Compatibility with other Android versions and Pwnagotchi versions has not been tested.
+> **⚠️ Important:** This plugin has been tested on an **Android 15** and **iOS 26.1** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
 
 ## Tested Hardware Configuration
 
