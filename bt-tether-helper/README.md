@@ -139,7 +139,130 @@ main.plugins.bt-tether-helper.show_on_screen = true  # Show status on display (d
 main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] (optional)
 main.plugins.bt-tether-helper.auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
 main.plugins.bt-tether-helper.reconnect_interval = 30  # Check connection every N seconds (default: 30)
+
+# UDP Broadcast Configuration (NEW)
+main.plugins.bt-tether-helper.udp_broadcast = true  # Enable UDP broadcasting of bnep0 IP (default: true)
+main.plugins.bt-tether-helper.udp_port = 8888  # UDP port for broadcasting (default: 8888)
+main.plugins.bt-tether-helper.udp_interval = 10  # Broadcast interval in seconds (default: 10)
 ```
+
+### UDP IP Broadcasting (NEW)
+
+The plugin now broadcasts the Pwnagotchi's bnep0 IP address via UDP, making it easy to find your Pwnagotchi on the network:
+
+- **Automatic Discovery**: Your phone can receive UDP broadcasts to discover the Pwnagotchi's IP
+- **Identifier**: Each broadcast includes the Pwnagotchi's name from `config.toml`
+- **Configurable**: Adjust port and broadcast interval to your needs
+- **Enabled by default**: Broadcasts every 10 seconds on port 8888
+
+**Broadcast Message Format:**
+
+```json
+{
+  "name": "pwnagotchi",
+  "interface": "bnep0",
+  "ip": "192.168.44.123",
+  "timestamp": 1704394800.0
+}
+```
+
+#### Viewing Broadcasts in Termux
+
+Simple one-liner to view broadcasts on your Android phone:
+
+1. **Install Termux** from F-Droid (not Play Store)
+2. **Install netcat** in Termux:
+
+   ```bash
+   pkg install netcat-openbsd
+   ```
+
+3. **Listen for broadcasts:**
+
+   ```bash
+   nc -u -l 8888
+   ```
+
+4. **You'll see JSON output:**
+
+   ```json
+   {
+     "name": "pwnagotchi",
+     "interface": "bnep0",
+     "ip": "192.168.44.123",
+     "timestamp": 1704394800.0
+   }
+   ```
+
+The IP address is in the `"ip"` field. Press Ctrl+C to stop.
+
+**For a different port:**
+
+```bash
+nc -u -l 9999
+```
+
+### How to View IP in Termux
+
+The simplest way to see your Pwnagotchi's IP address is using netcat in Termux:
+
+1. **Install Termux** from [F-Droid](https://f-droid.org/en/packages/com.termux/) (not Play Store)
+
+2. **Install netcat**:
+
+   ```bash
+   pkg install netcat-openbsd
+   ```
+
+3. **Listen for broadcasts**:
+
+   ```bash
+   nc -u -l 18888
+   ```
+
+4. **You'll see JSON output every 10 seconds**:
+   ```json
+   {
+     "name": "pwnagotchi",
+     "interface": "bnep0",
+     "ip": "192.168.44.123",
+     "timestamp": 1704394800.0
+   }
+   ```
+
+The IP address is in the `"ip"` field. Press Ctrl+C to stop listening.
+
+**Troubleshooting:**
+
+If you see random numbers instead of JSON:
+
+1. Check plugin logs: On Pwnagotchi run `pwnlog | grep bt-tether` or check `/var/log/pwnagotchi.log`
+2. Verify bnep0 has an IP: `ip addr show bnep0` (on Pwnagotchi)
+3. Test broadcasts: `tcpdump -i bnep0 -n udp port 18888` (on Pwnagotchi)
+4. Bluetooth networks may not forward broadcasts properly - see Direct Method below
+
+**Alternative: Direct Listen Method**
+
+If broadcasts don't work over Bluetooth, try listening on all interfaces:
+
+```bash
+nc -u -l -p 18888 0.0.0.0
+```
+
+Or check if you need to listen on your phone's specific Bluetooth IP:
+
+```bash
+# On Termux, find your bt-pan IP:
+ip addr | grep bt-pan
+
+# Then use that IP in netcat
+```
+
+**Tips:**
+
+- Change port if needed: `nc -u -l 9999` (must match `udp_port` in config)
+- Save IP to file: `nc -u -l 18888 | grep -oP '"ip":"\K[^"]+' > pwnagotchi-ip.txt`
+- Only broadcasts when bnep0 interface is active with an IP address
 
 ### Auto-Reconnect
 

@@ -692,6 +692,15 @@ class BTTetherHelper(Plugin):
             "reconnect_interval", 60
         )  # Check connection every N seconds (increased for RPi Zero W2)
 
+        # UDP broadcast configuration
+        self.udp_broadcast_enabled = self.options.get(
+            "udp_broadcast", True
+        )  # Enable UDP broadcasting of bnep0 IP
+        self.udp_port = self.options.get("udp_port", 18888)  # UDP port for broadcasting
+        self.udp_interval = self.options.get(
+            "udp_interval", 10
+        )  # Broadcast interval in seconds
+
         # Cache for status to avoid excessive bluetoothctl polling
         self._status_cache = None
         self._status_cache_time = 0
@@ -709,6 +718,10 @@ class BTTetherHelper(Plugin):
         self._monitor_thread = None
         self._monitor_stop = threading.Event()
         self._last_known_connected = False  # Track if we were previously connected
+
+        # UDP broadcasting thread
+        self._udp_thread = None
+        self._udp_stop = threading.Event()
 
         # Kill any lingering bluetoothctl processes to prevent deadlocks
         try:
@@ -747,6 +760,10 @@ class BTTetherHelper(Plugin):
         # Start connection monitoring thread if auto-reconnect is enabled
         if self.auto_reconnect and self.phone_mac:
             self._start_monitoring_thread()
+
+        # Start UDP broadcasting thread if enabled
+        if self.udp_broadcast_enabled:
+            self._start_udp_broadcast_thread()
 
         self._log("INFO", "Plugin loaded and initialized")
 
@@ -983,6 +1000,118 @@ default-agent
             time.sleep(self.reconnect_interval)
 
         logging.info("[bt-tether-helper] Connection monitor stopped")
+
+    def _start_udp_broadcast_thread(self):
+        """Start background thread to broadcast bnep0 IP via UDP"""
+        try:
+            if self._udp_thread and self._udp_thread.is_alive():
+                self._log("INFO", "UDP broadcast thread already running")
+                return
+
+            self._udp_stop.clear()
+            self._udp_thread = threading.Thread(
+                target=self._udp_broadcast_loop, daemon=True
+            )
+            self._udp_thread.start()
+            self._log(
+                "INFO",
+                f"Started UDP broadcast (port: {self.udp_port}, interval: {self.udp_interval}s)",
+            )
+        except Exception as e:
+            logging.error(
+                f"[bt-tether-helper] Failed to start UDP broadcast thread: {e}"
+            )
+
+    def _stop_udp_broadcast_thread(self):
+        """Stop the UDP broadcast thread"""
+        try:
+            if self._udp_thread and self._udp_thread.is_alive():
+                logging.info("[bt-tether-helper] Stopping UDP broadcast thread...")
+                self._udp_stop.set()
+                self._udp_thread.join(timeout=5)
+                logging.info("[bt-tether-helper] UDP broadcast thread stopped")
+        except Exception as e:
+            logging.error(
+                f"[bt-tether-helper] Error stopping UDP broadcast thread: {e}"
+            )
+
+    def _udp_broadcast_loop(self):
+        """Background loop to broadcast bnep0 IP address via UDP"""
+        import socket
+        import json
+
+        logging.info("[bt-tether-helper] UDP broadcast started")
+
+        # Wait a bit before starting to broadcast
+        time.sleep(5)
+
+        while not self._udp_stop.is_set():
+            try:
+                # Check if bnep0 interface exists and has IP
+                iface = self._get_pan_interface()
+                if iface:
+                    ip_address = self._get_interface_ip(iface)
+
+                    if ip_address:
+                        # Get pwnagotchi name from config
+                        try:
+                            import pwnagotchi
+
+                            # Try to get name from pwnagotchi config
+                            if hasattr(pwnagotchi, "name"):
+                                pwn_name = pwnagotchi.name
+                            elif hasattr(pwnagotchi, "config") and hasattr(
+                                pwnagotchi.config, "main"
+                            ):
+                                pwn_name = pwnagotchi.config.main.get(
+                                    "name", "pwnagotchi"
+                                )
+                            else:
+                                # Fallback: read from config file
+                                try:
+                                    import toml
+
+                                    with open("/etc/pwnagotchi/config.toml", "r") as f:
+                                        config = toml.load(f)
+                                        pwn_name = config.get("main", {}).get(
+                                            "name", "pwnagotchi"
+                                        )
+                                except:
+                                    pwn_name = "pwnagotchi"
+                        except:
+                            pwn_name = "pwnagotchi"
+
+                        # Create broadcast message
+                        message = {
+                            "name": pwn_name,
+                            "interface": iface,
+                            "ip": ip_address,
+                            "timestamp": time.time(),
+                        }
+
+                        # Broadcast via UDP
+                        try:
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                            sock.sendto(
+                                json.dumps(message).encode("utf-8"),
+                                ("<broadcast>", self.udp_port),
+                            )
+                            sock.close()
+
+                            logging.debug(
+                                f"[bt-tether-helper] Broadcast: {pwn_name} @ {ip_address} on port {self.udp_port}"
+                            )
+                        except Exception as e:
+                            logging.error(f"[bt-tether-helper] UDP send error: {e}")
+
+            except Exception as e:
+                logging.error(f"[bt-tether-helper] UDP broadcast loop error: {e}")
+
+            # Wait for next broadcast
+            time.sleep(self.udp_interval)
+
+        logging.info("[bt-tether-helper] UDP broadcast stopped")
 
     def _reconnect_device(self):
         """Attempt to reconnect to a previously paired device"""
