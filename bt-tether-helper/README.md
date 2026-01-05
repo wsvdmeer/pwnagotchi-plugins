@@ -46,10 +46,10 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 
    ```toml
    main.plugins.bt-tether-helper.enabled = true
-   main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC
-   main.plugins.bt-tether-helper.show_on_screen = true  # Optional: show status on display
-   main.plugins.bt-tether-helper.position = [200, 0]  # Optional: custom position [x, y]
+   main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"
    ```
+
+   > See [Configuration Options](#configuration-options) for additional settings (display, auto-reconnect, IP advertising, etc.)
 
 4. Restart Pwnagotchi:
    ```bash
