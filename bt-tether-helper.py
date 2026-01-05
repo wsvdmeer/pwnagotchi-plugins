@@ -2488,11 +2488,11 @@ default-agent
             return False
 
     def _setup_default_route(self, iface):
-        """Add default route through the tether interface if needed"""
+        """Adjust route metric for tether interface to avoid overriding existing connections"""
         try:
-            # Check if default route exists
+            # Check if default route exists for this interface
             result = subprocess.run(
-                ["ip", "route", "show", "default"],
+                ["ip", "route", "show", "default", "dev", iface],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
@@ -2500,33 +2500,48 @@ default-agent
             )
 
             if result.returncode == 0 and result.stdout.strip():
-                logging.info(f"[bt-tether-helper] Default route already exists")
-                return
-
-            # Get the gateway from the interface's network
-            ip_result = subprocess.run(
-                ["ip", "-4", "addr", "show", iface],
-                stdout=subprocess.PIPE,
-                text=True,
-                timeout=5,
-            )
-
-            if ip_result.returncode == 0:
+                # Extract gateway from existing route
                 import re
-
-                # Look for gateway in the subnet
-                result = subprocess.run(
-                    ["ip", "route", "show", "dev", iface],
-                    stdout=subprocess.PIPE,
-                    text=True,
-                    timeout=5,
-                )
-
-                if result.returncode == 0:
-                    # Gateway should be auto-configured via DHCP
-                    logging.info(
-                        f"[bt-tether-helper] Route configuration: {result.stdout.strip()}"
-                    )
+                gateway_match = re.search(r'via\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                
+                if gateway_match:
+                    gateway = gateway_match.group(1)
+                    logging.info(f"[bt-tether-helper] Found default route via {gateway} on {iface}")
+                    
+                    # Delete the existing route without metric
+                    try:
+                        subprocess.run(
+                            ["sudo", "ip", "route", "del", "default", "via", gateway, "dev", iface],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            timeout=5,
+                        )
+                        logging.info(f"[bt-tether-helper] Removed default route without metric")
+                    except Exception as e:
+                        logging.debug(f"[bt-tether-helper] Route deletion: {e}")
+                    
+                    # Add route with higher metric (200) to not override eth/usb connections
+                    try:
+                        subprocess.run(
+                            ["sudo", "ip", "route", "add", "default", "via", gateway, "dev", iface, "metric", "200"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            timeout=5,
+                        )
+                        logging.info(f"[bt-tether-helper] Added default route with metric 200 (lower priority than eth/usb)")
+                    except Exception as e:
+                        logging.warning(f"[bt-tether-helper] Failed to add route with metric: {e}")
+                        # Re-add original route if metric addition failed
+                        subprocess.run(
+                            ["sudo", "ip", "route", "add", "default", "via", gateway, "dev", iface],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=5,
+                        )
+                else:
+                    logging.info(f"[bt-tether-helper] Default route exists but gateway not found")
+            else:
+                logging.info(f"[bt-tether-helper] No default route found for {iface}")
 
         except Exception as e:
             logging.debug(f"[bt-tether-helper] Route setup note: {e}")
