@@ -137,14 +137,23 @@ Both displays update in real-time based on connection state.
 ## Configuration Options
 
 ```toml
-main.plugins.bt-tether-helper.enabled = true
+# Core Settings
+main.plugins.bt-tether-helper.enabled = true  # Enable the plugin
 main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC address
+
+# Display Settings - Compact Status (single-letter indicator)
 main.plugins.bt-tether-helper.show_on_screen = true  # Show compact status on display (default: true)
-main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] for compact status (optional)
+main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] for compact status (optional, default: auto top-right)
+
+# Display Settings - Detailed Status (full status line with IP)
 main.plugins.bt-tether-helper.show_detailed_status = true  # Show detailed status line with IP (default: true)
 main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for detailed status (default: [0, 82])
+
+# Auto-Reconnect Settings
 main.plugins.bt-tether-helper.auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
 main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every N seconds (default: 60)
+
+# IP Advertising (Headless Mode)
 main.plugins.bt-tether-helper.advertise_ip = false  # Show IP in Bluetooth device name (default: false, enable for headless use)
 ```
 
