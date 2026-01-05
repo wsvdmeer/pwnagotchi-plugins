@@ -2490,58 +2490,66 @@ default-agent
     def _setup_default_route(self, iface):
         """Adjust route metric for tether interface to avoid overriding existing connections"""
         try:
-            # Check if default route exists for this interface
-            result = subprocess.run(
-                ["ip", "route", "show", "default", "dev", iface],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=5,
-            )
+            # Wait for dhclient to add the route (it runs asynchronously with -nw flag)
+            # Retry up to 5 times with 1 second delay
+            gateway = None
+            for attempt in range(5):
+                result = subprocess.run(
+                    ["ip", "route", "show", "default", "dev", iface],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=5,
+                )
 
-            if result.returncode == 0 and result.stdout.strip():
-                # Extract gateway from existing route
-                import re
-                gateway_match = re.search(r'via\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                if result.returncode == 0 and result.stdout.strip():
+                    # Extract gateway from existing route
+                    import re
+                    gateway_match = re.search(r'via\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
+                    
+                    if gateway_match:
+                        gateway = gateway_match.group(1)
+                        logging.info(f"[bt-tether-helper] Found default route via {gateway} on {iface}")
+                        break
                 
-                if gateway_match:
-                    gateway = gateway_match.group(1)
-                    logging.info(f"[bt-tether-helper] Found default route via {gateway} on {iface}")
-                    
-                    # Delete the existing route without metric
-                    try:
-                        subprocess.run(
-                            ["sudo", "ip", "route", "del", "default", "via", gateway, "dev", iface],
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            timeout=5,
-                        )
-                        logging.info(f"[bt-tether-helper] Removed default route without metric")
-                    except Exception as e:
-                        logging.debug(f"[bt-tether-helper] Route deletion: {e}")
-                    
-                    # Add route with higher metric (200) to not override eth/usb connections
-                    try:
-                        subprocess.run(
-                            ["sudo", "ip", "route", "add", "default", "via", gateway, "dev", iface, "metric", "200"],
-                            stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE,
-                            timeout=5,
-                        )
-                        logging.info(f"[bt-tether-helper] Added default route with metric 200 (lower priority than eth/usb)")
-                    except Exception as e:
-                        logging.warning(f"[bt-tether-helper] Failed to add route with metric: {e}")
-                        # Re-add original route if metric addition failed
-                        subprocess.run(
-                            ["sudo", "ip", "route", "add", "default", "via", gateway, "dev", iface],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=5,
-                        )
-                else:
-                    logging.info(f"[bt-tether-helper] Default route exists but gateway not found")
+                # Route not found yet, wait and retry
+                if attempt < 4:
+                    time.sleep(1)
+                    logging.debug(f"[bt-tether-helper] Waiting for default route to appear (attempt {attempt + 1}/5)...")
+            
+            if gateway:
+                # Delete the existing route without metric
+                try:
+                    subprocess.run(
+                        ["sudo", "ip", "route", "del", "default", "via", gateway, "dev", iface],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5,
+                    )
+                    logging.info(f"[bt-tether-helper] Removed default route without metric")
+                except Exception as e:
+                    logging.debug(f"[bt-tether-helper] Route deletion: {e}")
+                
+                # Add route with higher metric (200) to not override eth/usb connections
+                try:
+                    subprocess.run(
+                        ["sudo", "ip", "route", "add", "default", "via", gateway, "dev", iface, "metric", "200"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5,
+                    )
+                    logging.info(f"[bt-tether-helper] ✓ Added default route with metric 200 (lower priority than eth/usb)")
+                except Exception as e:
+                    logging.warning(f"[bt-tether-helper] Failed to add route with metric: {e}")
+                    # Re-add original route if metric addition failed
+                    subprocess.run(
+                        ["sudo", "ip", "route", "add", "default", "via", gateway, "dev", iface],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                    )
             else:
-                logging.info(f"[bt-tether-helper] No default route found for {iface}")
+                logging.info(f"[bt-tether-helper] No default route found for {iface} after waiting")
 
         except Exception as e:
             logging.debug(f"[bt-tether-helper] Route setup note: {e}")
