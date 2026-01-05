@@ -27,6 +27,7 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 - **Device Scanning**: Scan for nearby Bluetooth devices to find and copy MAC addresses
 - **Status Display**: Real-time connection status on Pwnagotchi screen
 - **PAN (Personal Area Network) Support**: Automatic network interface configuration
+- **IP Advertising**: Optional Bluetooth device name updates with IP address (useful for headless operation)
 
 ## Installation
 
@@ -36,19 +37,12 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
    sudo cp bt-tether-helper.py /usr/local/share/pwnagotchi/custom-plugins/
    ```
 
-2. Install required dependencies:
-
-   ```bash
-   sudo apt-get update
-   sudo apt-get install -y python3-dbus bluez
-   ```
-
-3. Find your phone's MAC address:
+2. Find your phone's MAC address:
 
    - Use the web interface scan function (see Usage section below), or
    - Check in Android: Settings → About Phone → Status → Bluetooth address
 
-4. Add your phone's MAC address to `/etc/pwnagotchi/config.toml`:
+3. Add your phone's MAC address to `/etc/pwnagotchi/config.toml`:
 
    ```toml
    main.plugins.bt-tether-helper.enabled = true
@@ -57,10 +51,12 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
    main.plugins.bt-tether-helper.position = [200, 0]  # Optional: custom position [x, y]
    ```
 
-5. Restart Pwnagotchi:
+4. Restart Pwnagotchi:
    ```bash
    pwnkill
    ```
+
+> **Note:** All required dependencies (`dbus-python`, `toml`, `bluez`) are already included in Pwnagotchi - no additional packages needed!
 
 ## Usage
 
@@ -122,35 +118,95 @@ This is especially useful for troubleshooting when you have multiple network int
 
 ### On-Screen Status Indicators
 
-When `show_on_screen` is enabled, a status indicator appears on the Pwnagotchi display:
+The plugin provides two display modes that can be used independently or together:
 
-- **C** = Connected with internet access
-- **N** = Connected but no internet
-- **P** = Paired but not connected
-- **D** = Disconnected
-- **?** = Unknown/Error
+**1. Compact Status (top-right corner):**
+
+- Single-letter indicator (configurable via `position`)
+- Minimal screen space usage
+- Quick status at a glance
+
+**2. Detailed Status (default: position [0, 82]):**
+
+- Full status text with IP address when connected
+- Shows pairing/trust state
+- Configurable via `detailed_status_position`
+
+Both displays update in real-time based on connection state.
 
 ## Configuration Options
 
 ```toml
 main.plugins.bt-tether-helper.enabled = true
 main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC address
-main.plugins.bt-tether-helper.show_on_screen = true  # Show status on display (default: true)
-main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] (optional)
+main.plugins.bt-tether-helper.show_on_screen = true  # Show compact status on display (default: true)
+main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] for compact status (optional)
+main.plugins.bt-tether-helper.show_detailed_status = true  # Show detailed status line with IP (default: true)
+main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for detailed status (default: [0, 82])
 main.plugins.bt-tether-helper.auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
-main.plugins.bt-tether-helper.reconnect_interval = 30  # Check connection every N seconds (default: 30)
+main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every N seconds (default: 60)
+main.plugins.bt-tether-helper.advertise_ip = false  # Show IP in Bluetooth device name (default: false, enable for headless use)
 ```
+
+### Display Options
+
+**Compact Status (`show_on_screen`):**
+
+- Shows single-letter status in top-right corner
+- **C** = Connected with internet
+- **N** = Connected but no internet
+- **P** = Paired but not connected
+- **D** = Disconnected
+- **>** = Connecting/Pairing in progress
+- **?** = Unknown/Error
+
+**Detailed Status (`show_detailed_status`):**
+
+- Shows full status at configurable position (default: [0, 82])
+- **BT:10.199.236.17** = Connected with IP address
+- **BT:Connected** = Connected but no IP detected
+- **BT:Paired+Trusted** = Paired and trusted, ready to connect
+- **BT:Paired** = Only paired, not trusted
+- **BT:Connecting...** = Connection in progress
+- **BT:Disconnected** = Not connected
 
 ### Auto-Reconnect
 
-The plugin now includes automatic reconnection monitoring:
+The plugin includes automatic reconnection monitoring:
 
 - **Enabled by default**: The plugin monitors your Bluetooth connection and automatically reconnects if it drops
-- **Configurable interval**: Check connection status every 30 seconds (configurable via `reconnect_interval`)
+- **Configurable interval**: Check connection status every 60 seconds by default (configurable via `reconnect_interval`)
 - **Smart reconnection**: Only attempts reconnection when device is paired/trusted but disconnected
 - **Non-intrusive**: Won't interfere with manual connection/disconnection operations
 
 To disable auto-reconnect, set `main.plugins.bt-tether-helper.auto_reconnect = false` in your config.
+
+## IP Advertising (Headless Mode)
+
+For headless operation, the plugin can update your Bluetooth adapter's device name to include the current IP address, making it easy to find your Pwnagotchi's IP without SSH or display access.
+
+### What is shown
+
+- **Device Name**: Your Pwnagotchi name (from `main.name` in config.toml)
+- **IP Address**: Current IP address from active interface (Bluetooth, USB, WiFi, or Ethernet)
+- **Format**: `{pwnagotchi_name} | {ip_address}`
+
+### How to view
+
+The device will show up in your phone's Bluetooth settings with the updated name:
+
+- **Android**: Settings → Bluetooth
+- **iOS**: Settings → Bluetooth
+
+The device name updates once after internet connectivity is verified, then again on each reconnection.
+
+### Configuration
+
+```toml
+main.plugins.bt-tether-helper.advertise_ip = true  # Enable IP advertising (default: false)
+```
+
+> **Note**: This feature is **disabled by default** to avoid unnecessary name changes. Enable it if you use your Pwnagotchi in headless mode (no display/SSH).
 
 ## Troubleshooting
 
@@ -180,6 +236,15 @@ To disable auto-reconnect, set `main.plugins.bt-tether-helper.auto_reconnect = f
 - Use the "Disconnect" button in web interface (automatically blocks device)
 - Manual command: `bluetoothctl disconnect XX:XX:XX:XX:XX:XX`
 - If still connected, unpair the device
+
+### IP Not Showing in Device Name
+
+- Ensure `advertise_ip = true` is set in your config.toml
+- Check plugin logs: `pwnlog | grep bt-tether-helper`
+- Ensure internet connectivity is established (feature waits for connectivity verification)
+- Verify Bluetooth service is running: `sudo systemctl status bluetooth`
+- Try restarting Pwnagotchi: `pwnkill`
+- On your phone, try refreshing the Bluetooth device list or toggling Bluetooth off/on
 
 ## Advanced
 
