@@ -2339,37 +2339,22 @@ default-agent
                 subprocess.run(["which", "dhclient"], capture_output=True).returncode
                 == 0
             ):
-                # Release any existing lease for this interface first
-                try:
-                    subprocess.run(
-                        ["sudo", "dhclient", "-r", iface],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=5,
-                    )
-                except Exception:
-                    pass
                 dhcp_cmd = [
                     "sudo",
                     "dhclient",
                     "-nw",
+                    "-i",
                     iface,
-                ]  # -nw: no wait (daemonize immediately)
+                ]  # -nw: no wait, -i: specify interface explicitly
             elif (
                 subprocess.run(["which", "dhcpcd"], capture_output=True).returncode == 0
             ):
-                # Release any existing lease for this interface first
-                try:
-                    subprocess.run(
-                        ["sudo", "dhcpcd", "-k", iface],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=3,
-                    )
-                    time.sleep(0.5)
-                except Exception:
-                    pass
-                dhcp_cmd = ["sudo", "dhcpcd", "-n", "-w", iface]  # -n: no background, -w: wait for IP
+                dhcp_cmd = [
+                    "sudo",
+                    "dhcpcd",
+                    "-w",
+                    iface,
+                ]  # -w: wait for IP assignment, daemon will handle existing leases
             elif (
                 subprocess.run(["which", "udhcpc"], capture_output=True).returncode == 0
             ):
@@ -2662,20 +2647,13 @@ default-agent
             logging.info(f"[bt-tether-helper] Requesting IP via DHCP on {iface}...")
             try:
                 # Try dhcpcd first (common on Raspberry Pi)
-                # Kill any existing dhcpcd process for THIS interface only
-                try:
-                    subprocess.run(
-                        ["sudo", "dhcpcd", "-k", iface],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=3,
-                    )
-                    time.sleep(0.5)
-                except Exception:
-                    pass
-                
                 result = subprocess.run(
-                    ["sudo", "dhcpcd", "-n", "-w", iface],  # -n: no background, -w: wait for IP
+                    [
+                        "sudo",
+                        "dhcpcd",
+                        "-w",
+                        iface,
+                    ],  # -w: wait for IP, daemon handles existing leases
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -2695,8 +2673,9 @@ default-agent
                             "sudo",
                             "dhclient",
                             "-nw",
+                            "-i",
                             iface,
-                        ],  # -nw: no wait (daemonize immediately)
+                        ],  # -nw: no wait, -i: specify interface explicitly
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
