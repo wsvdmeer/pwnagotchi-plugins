@@ -939,7 +939,7 @@ class BTTetherHelper(Plugin):
             # > = Connecting/Pairing in progress
             with self.lock:
                 connection_in_progress = self._connection_in_progress
-            
+
             if connection_in_progress:
                 ui.set("bt-status", ">")
                 # Still update detailed status even during connection/disconnection
@@ -1735,7 +1735,7 @@ default-agent
             # If connection/pairing is in progress, return cached status to avoid blocking
             with self.lock:
                 connection_in_progress = self._connection_in_progress
-            
+
             if connection_in_progress:
                 if self._status_cache:
                     return self._status_cache
@@ -2310,6 +2310,18 @@ default-agent
             # Try to actively request IP via DHCP
             self._log("info", f"Requesting IP address via DHCP for {iface}...")
 
+            # Kill any existing dhclient process for THIS interface only (not other interfaces)
+            try:
+                subprocess.run(
+                    ["sudo", "pkill", "-f", f"dhclient.*{iface}"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=2,
+                )
+                time.sleep(0.5)
+            except Exception:
+                pass
+
             # Ensure interface is up
             subprocess.run(
                 ["sudo", "ip", "link", "set", iface, "up"],
@@ -2327,11 +2339,37 @@ default-agent
                 subprocess.run(["which", "dhclient"], capture_output=True).returncode
                 == 0
             ):
-                dhcp_cmd = ["sudo", "dhclient", "-v", iface]
+                # Release any existing lease for this interface first
+                try:
+                    subprocess.run(
+                        ["sudo", "dhclient", "-r", iface],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                    )
+                except Exception:
+                    pass
+                dhcp_cmd = [
+                    "sudo",
+                    "dhclient",
+                    "-nw",
+                    iface,
+                ]  # -nw: no wait (daemonize immediately)
             elif (
                 subprocess.run(["which", "dhcpcd"], capture_output=True).returncode == 0
             ):
-                dhcp_cmd = ["sudo", "dhcpcd", iface]
+                # Release any existing lease for this interface first
+                try:
+                    subprocess.run(
+                        ["sudo", "dhcpcd", "-k", iface],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3,
+                    )
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+                dhcp_cmd = ["sudo", "dhcpcd", "-n", "-w", iface]  # -n: no background, -w: wait for IP
             elif (
                 subprocess.run(["which", "udhcpc"], capture_output=True).returncode == 0
             ):
@@ -2344,7 +2382,7 @@ default-agent
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
-                    timeout=30,
+                    timeout=15,  # Reduced timeout since -nw returns immediately
                 )
                 if dhcp_result.returncode == 0:
                     self._log("info", "✓ DHCP request completed")
@@ -2624,8 +2662,20 @@ default-agent
             logging.info(f"[bt-tether-helper] Requesting IP via DHCP on {iface}...")
             try:
                 # Try dhcpcd first (common on Raspberry Pi)
+                # Kill any existing dhcpcd process for THIS interface only
+                try:
+                    subprocess.run(
+                        ["sudo", "dhcpcd", "-k", iface],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3,
+                    )
+                    time.sleep(0.5)
+                except Exception:
+                    pass
+                
                 result = subprocess.run(
-                    ["sudo", "dhcpcd", "-n", iface],
+                    ["sudo", "dhcpcd", "-n", "-w", iface],  # -n: no background, -w: wait for IP
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -2641,11 +2691,16 @@ default-agent
                         f"[bt-tether-helper] dhcpcd failed, trying dhclient..."
                     )
                     result = subprocess.run(
-                        ["sudo", "dhclient", "-v", iface],
+                        [
+                            "sudo",
+                            "dhclient",
+                            "-nw",
+                            iface,
+                        ],  # -nw: no wait (daemonize immediately)
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
-                        timeout=15,
+                        timeout=10,  # Reduced timeout since -nw returns immediately
                     )
                     if result.returncode == 0:
                         logging.info(
