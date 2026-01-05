@@ -4,6 +4,16 @@ A comprehensive Bluetooth tethering plugin that provides guided setup and automa
 
 ![bt-tether-helper Web Interface](ui.png)
 
+> **⚠️ IMPORTANT - Known Issues:** The main branch has known issues with network routing that can interfere with existing network connections. **Please use the development branch instead:**
+>
+> **Use this branch:** [feature/0.9.0-beta](https://github.com/wsvdmeer/pwnagotchi-plugins/tree/feature/0.9.0-beta)
+>
+> This branch includes fixes for:
+>
+> - DHCP conflicts with existing network interfaces
+> - Routing metric issues that override primary connections
+> - Interface-specific DHCP client isolation
+
 > **🚧 Work in Progress:** This plugin is currently in **beta** and under active development. Features and functionality may change.
 
 > **⚠️ Important:** This plugin has been tested on an **Android 15** and **iOS 26.1** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
