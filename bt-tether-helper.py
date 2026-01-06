@@ -1334,6 +1334,8 @@ default-agent
                                 self._log(
                                     "WARNING", f"Failed to update device name: {e}"
                                 )
+                        # Invalidate cache so screen gets fresh IP
+                        self._invalidate_status_cache()
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"✓ Reconnected! Internet via {iface}"
