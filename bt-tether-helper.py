@@ -1319,6 +1319,21 @@ default-agent
                     if self._check_internet_connectivity():
                         self._log("INFO", f"✓ Internet connectivity verified!")
                         self._connectivity_verified.set()  # Signal BLE thread
+                        # Update device name with new IP if advertise_ip is enabled
+                        if self.advertise_ip and DBUS_AVAILABLE:
+                            try:
+                                pwn_name = self._get_pwnagotchi_name()
+                                current_ip = self._get_current_ip()
+                                if current_ip:
+                                    self._log(
+                                        "INFO",
+                                        f"Updating device name to: {pwn_name} | {current_ip}",
+                                    )
+                                    self._update_device_name(pwn_name, current_ip)
+                            except Exception as e:
+                                self._log(
+                                    "WARNING", f"Failed to update device name: {e}"
+                                )
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"✓ Reconnected! Internet via {iface}"
@@ -2170,7 +2185,21 @@ default-agent
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"✓ Connected! Internet via {iface}"
-                            self._connection_in_progress = False
+                        # Update device name with new IP if advertise_ip is enabled (after clearing connection flag)
+                        if self.advertise_ip and DBUS_AVAILABLE:
+                            try:
+                                pwn_name = self._get_pwnagotchi_name()
+                                current_ip = self._get_current_ip()
+                                if current_ip:
+                                    self._log(
+                                        "INFO",
+                                        f"Updating device name to: {pwn_name} | {current_ip}",
+                                    )
+                                    self._update_device_name(pwn_name, current_ip)
+                            except Exception as e:
+                                self._log(
+                                    "WARNING", f"Failed to update device name: {e}"
+                                )
                     else:
                         self._log("WARNING", "No internet connectivity detected")
                         self._invalidate_status_cache()  # Invalidate before clearing flag
@@ -2179,21 +2208,18 @@ default-agent
                             self.message = (
                                 f"Connected via {iface} but no internet access"
                             )
-                            self._connection_in_progress = False
                 else:
                     self._log("WARNING", "NAP connected but no interface detected")
                     self._invalidate_status_cache()  # Invalidate before clearing flag
                     with self.lock:
                         self.status = "CONNECTED"
                         self.message = "Connected but no internet. Enable Bluetooth tethering on phone."
-                        self._connection_in_progress = False
             else:
                 self._log("WARNING", "NAP connection failed")
                 self._invalidate_status_cache()  # Invalidate before clearing flag
                 with self.lock:
                     self.status = "CONNECTED"
                     self.message = "Bluetooth connected but tethering failed. Enable tethering on phone."
-                    self._connection_in_progress = False
 
         except Exception as e:
             self._log("ERROR", f"Connection thread error: {e}")
@@ -2365,12 +2391,13 @@ default-agent
             )
 
             # Check which DHCP client is available
-            has_dhcpcd = subprocess.run(
-                ["which", "dhcpcd"], capture_output=True
-            ).returncode == 0
-            has_dhclient = subprocess.run(
-                ["which", "dhclient"], capture_output=True
-            ).returncode == 0
+            has_dhcpcd = (
+                subprocess.run(["which", "dhcpcd"], capture_output=True).returncode == 0
+            )
+            has_dhclient = (
+                subprocess.run(["which", "dhclient"], capture_output=True).returncode
+                == 0
+            )
 
             self._log("INFO", f"Requesting DHCP on {iface}...")
             dhcp_success = False
@@ -2410,7 +2437,7 @@ default-agent
                     timeout=3,
                 )
                 time.sleep(0.5)
-                
+
                 # Request new lease with better error handling
                 try:
                     result = subprocess.run(
@@ -2421,24 +2448,33 @@ default-agent
                         timeout=30,
                     )
                     combined = f"{result.stdout} {result.stderr}".strip()
-                    
+
                     # Check for common error messages
                     if "Network error: Software caused connection abort" in combined:
                         self._log("WARNING", "dhclient: Connection aborted by phone")
-                        self._log("WARNING", "📱 Make sure Bluetooth tethering is ENABLED on your phone!")
-                        self._log("WARNING", "📱 Settings → Network → Hotspot & tethering → Bluetooth tethering")
+                        self._log(
+                            "WARNING",
+                            "📱 Make sure Bluetooth tethering is ENABLED on your phone!",
+                        )
+                        self._log(
+                            "WARNING",
+                            "📱 Settings → Network → Hotspot & tethering → Bluetooth tethering",
+                        )
                     elif "DHCPDISCOVER" in combined and "No DHCPOFFERS" in combined:
                         self._log("WARNING", "dhclient: No DHCP response from phone")
-                        self._log("WARNING", "📱 Phone is not providing DHCP - enable Bluetooth tethering!")
+                        self._log(
+                            "WARNING",
+                            "📱 Phone is not providing DHCP - enable Bluetooth tethering!",
+                        )
                     elif combined:
                         # Truncate long output
                         self._log("INFO", f"dhclient: {combined[:200]}")
-                    
+
                     if result.returncode == 0:
                         dhcp_success = True
                     else:
                         self._log("WARNING", f"dhclient returned {result.returncode}")
-                        
+
                 except subprocess.TimeoutExpired:
                     self._log("WARNING", "dhclient timed out after 30s")
                     # Kill hung dhclient
@@ -2450,7 +2486,10 @@ default-agent
                     )
 
             else:
-                self._log("ERROR", "No DHCP client found! Install dhclient: sudo apt install isc-dhcp-client")
+                self._log(
+                    "ERROR",
+                    "No DHCP client found! Install dhclient: sudo apt install isc-dhcp-client",
+                )
                 return False
 
             # Check for IP with extended wait time (tethering may take time to fully start)
@@ -2476,7 +2515,9 @@ default-agent
                             self._log("INFO", f"✓ {iface} got IP: {ip_addr}")
                             break
                         else:
-                            self._log("DEBUG", f"Link-local IP {ip_addr}, waiting for DHCP...")
+                            self._log(
+                                "DEBUG", f"Link-local IP {ip_addr}, waiting for DHCP..."
+                            )
                             ip_addr = None
 
                 if attempt < max_checks - 1:
@@ -2489,7 +2530,10 @@ default-agent
             else:
                 self._log("ERROR", f"❌ No IP on {iface} after {max_checks * 2}s")
                 self._log("ERROR", "📱 Enable Bluetooth tethering on your phone!")
-                self._log("ERROR", "📱 Settings → Network & internet → Hotspot & tethering → Bluetooth tethering")
+                self._log(
+                    "ERROR",
+                    "📱 Settings → Network & internet → Hotspot & tethering → Bluetooth tethering",
+                )
                 return False
 
         except Exception as e:
