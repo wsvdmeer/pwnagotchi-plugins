@@ -38,6 +38,8 @@ import threading
 import time
 import logging
 import os
+import re
+import traceback
 from pwnagotchi.plugins import Plugin
 from flask import render_template_string, request, jsonify
 import pwnagotchi.ui.fonts as fonts
@@ -684,6 +686,7 @@ class BTTetherHelper(Plugin):
     NAME_UPDATE_INTERVAL = 30
 
     def on_loaded(self):
+        """Initialize plugin configuration and data structures only - no heavy operations"""
         from collections import deque
 
         self.phone_mac = self.options.get("mac", "")
@@ -745,46 +748,6 @@ class BTTetherHelper(Plugin):
         self._max_reconnect_failures = 3  # Stop auto-reconnect after this many failures
         self._user_requested_disconnect = False  # Track if user manually disconnected
 
-        # Kill any lingering bluetoothctl processes to prevent deadlocks
-        try:
-            subprocess.run(
-                ["pkill", "-9", "bluetoothctl"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            self._log("INFO", "Cleaned up lingering bluetoothctl processes")
-        except Exception as e:
-            self._log("DEBUG", f"Process cleanup: {e}")
-
-        # Restart bluetooth service to ensure clean state
-        try:
-            self._log("INFO", "Restarting Bluetooth service...")
-            subprocess.run(
-                ["systemctl", "restart", "bluetooth"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=5,  # Reduced timeout for RPi Zero W2
-            )
-            time.sleep(
-                self.BLUETOOTH_SERVICE_STARTUP_DELAY
-            )  # Give service extra time to start on slow hardware
-            self._log("INFO", "Bluetooth service restarted")
-        except Exception as e:
-            self._log("WARNING", f"Failed to restart Bluetooth service: {e}")
-
-        # Verify localhost routing is intact (critical for bettercap API)
-        try:
-            self._verify_localhost_route()
-        except Exception as e:
-            self._log("WARNING", f"Initial localhost check failed: {e}")
-
-        # Start persistent pairing agent in background
-        self._start_pairing_agent()
-
-        # Start connection monitoring thread if auto-reconnect is enabled
-        if self.auto_reconnect and self.phone_mac:
-            self._start_monitoring_thread()
-
         # Device name update configuration
         self.advertise_ip = self.options.get(
             "advertise_ip", False
@@ -795,30 +758,108 @@ class BTTetherHelper(Plugin):
             threading.Event()
         )  # Signal when internet is verified
 
-        # Set initial device name immediately (without IP)
-        if DBUS_AVAILABLE:
+        # Track if initialization has been done (to prevent double-init from fallback)
+        self._initialization_done = threading.Event()
+        
+        # Track fallback thread for cleanup
+        self._fallback_thread = None
+
+        self._log("INFO", "Plugin configuration loaded")
+
+        # Start fallback initialization thread in case on_ready() is never called
+        self._fallback_thread = threading.Thread(
+            target=self._fallback_initialization, daemon=True
+        )
+        self._fallback_thread.start()
+
+    def _fallback_initialization(self):
+        """Fallback initialization if on_ready() is not called within timeout"""
+        # Wait 15 seconds for on_ready() to be called
+        if not self._initialization_done.wait(timeout=15):
+            self._log(
+                "WARNING", "on_ready() was not called, using fallback initialization"
+            )
+            self._initialize_bluetooth_services()
+
+    def on_ready(self, agent):
+        """Called when everything is ready and the main loop is about to start"""
+        self._log("INFO", "on_ready() called, initializing Bluetooth services...")
+        # Signal that on_ready was called (prevents fallback from running)
+        if not self._initialization_done.is_set():
+            self._initialization_done.set()
+            self._initialize_bluetooth_services()
+
+    def _initialize_bluetooth_services(self):
+        """Initialize Bluetooth services - called by either on_ready() or fallback"""
+        try:
+            # Kill any lingering bluetoothctl processes to prevent deadlocks
             try:
-                pwn_name = self._get_pwnagotchi_name()
-                self._log("INFO", f"Setting initial device name: {pwn_name}")
-                self._update_device_name(pwn_name, None)
-            except Exception as e:
-                self._log("WARNING", f"Failed to set initial device name: {e}")
-
-        # Start device name update thread
-        if self.advertise_ip:
-            if not DBUS_AVAILABLE:
-                self._log("ERROR", "Device name updates disabled - dbus not available")
-                self._log(
-                    "ERROR",
-                    "Install with: sudo apt-get install -y python3-dbus",
+                subprocess.run(
+                    ["pkill", "-9", "bluetoothctl"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
-            else:
-                self._log("INFO", "Starting device name update thread...")
-                self._start_ble_advertising()
-        else:
-            self._log("INFO", "Device name IP advertising disabled in config")
+                self._log("INFO", "Cleaned up lingering bluetoothctl processes")
+            except Exception as e:
+                self._log("DEBUG", f"Process cleanup: {e}")
 
-        self._log("INFO", "Plugin loaded and initialized")
+            # Restart bluetooth service to ensure clean state
+            try:
+                self._log("INFO", "Restarting Bluetooth service...")
+                subprocess.run(
+                    ["systemctl", "restart", "bluetooth"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                )
+                time.sleep(self.BLUETOOTH_SERVICE_STARTUP_DELAY)
+                self._log("INFO", "Bluetooth service restarted")
+            except Exception as e:
+                self._log("WARNING", f"Failed to restart Bluetooth service: {e}")
+
+            # Verify localhost routing is intact (critical for bettercap API)
+            try:
+                self._verify_localhost_route()
+            except Exception as e:
+                self._log("WARNING", f"Initial localhost check failed: {e}")
+
+            # Start persistent pairing agent in background
+            self._start_pairing_agent()
+
+            # Start connection monitoring thread if auto-reconnect is enabled
+            if self.auto_reconnect and self.phone_mac:
+                self._start_monitoring_thread()
+
+            # Set initial device name immediately (without IP)
+            if DBUS_AVAILABLE:
+                try:
+                    pwn_name = self._get_pwnagotchi_name()
+                    self._log("INFO", f"Setting initial device name: {pwn_name}")
+                    self._update_device_name(pwn_name, None)
+                except Exception as e:
+                    self._log("WARNING", f"Failed to set initial device name: {e}")
+
+            # Start device name update thread
+            if self.advertise_ip:
+                if not DBUS_AVAILABLE:
+                    self._log(
+                        "ERROR", "Device name updates disabled - dbus not available"
+                    )
+                    self._log(
+                        "ERROR", "Install with: sudo apt-get install -y python3-dbus"
+                    )
+                else:
+                    self._log("INFO", "Starting device name update thread...")
+                    self._start_ble_advertising()
+            else:
+                self._log("INFO", "Device name IP advertising disabled in config")
+
+            self._log("INFO", "Bluetooth services initialized")
+        except Exception as e:
+            self._log("ERROR", f"Failed to initialize Bluetooth services: {e}")
+
+
+            self._log("ERROR", f"Traceback: {traceback.format_exc()}")
 
     def on_unload(self, ui):
         """Cleanup when plugin is unloaded"""
@@ -1232,7 +1273,7 @@ default-agent
             mac = self.phone_mac
             if not mac:
                 self._log("ERROR", "No MAC address configured for reconnection")
-                return
+                return False
 
             # Set flag to prevent concurrent operations
             with self.lock:
@@ -1301,7 +1342,6 @@ default-agent
                     return True
             else:
                 logging.warning(f"[bt-tether-helper] Reconnection failed")
-                return False
                 with self.lock:
                     self.status = "ERROR"
                     self.message = "Reconnection failed. Will retry later."
@@ -1351,7 +1391,7 @@ default-agent
                                 or "confirm passkey" in clean_line.lower()
                             ):
                                 # Extract passkey number (usually 6 digits)
-                                import re
+
 
                                 passkey_match = re.search(
                                     r"passkey\s+(\d{6})", clean_line, re.IGNORECASE
@@ -1510,7 +1550,7 @@ default-agent
 
     def _validate_mac(self, mac):
         """Validate MAC address format"""
-        import re
+
 
         return bool(re.match(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$", mac))
 
@@ -1648,20 +1688,20 @@ default-agent
             # Invalidate status cache before unpair
             self._invalidate_status_cache()
 
-            self._log("info", f"Unpairing device {mac}...")
+            self._log("INFO", f"Unpairing device {mac}...")
             result = self._run_cmd(
                 ["bluetoothctl", "remove", mac], capture=True, timeout=10
             )
 
             if result == "Timeout":
-                self._log("warning", "Unpair command timed out")
+                self._log("WARNING", "Unpair command timed out")
                 # Still consider it successful - device is likely already gone
                 return {
                     "success": True,
                     "message": "Device was already unpaired or removed",
                 }
             elif result and "Device has been removed" in result:
-                self._log("info", f"Device {mac} unpaired successfully")
+                self._log("INFO", f"Device {mac} unpaired successfully")
 
                 # Update internal state
                 with self.lock:
@@ -1694,16 +1734,16 @@ default-agent
             elif result and (
                 "not available" in result or "not found" in result.lower()
             ):
-                self._log("info", f"Device {mac} was already removed")
+                self._log("INFO", f"Device {mac} was already removed")
                 return {
                     "success": True,
                     "message": f"Device {mac} was already unpaired",
                 }
             else:
-                self._log("warning", f"Unpair result: {result}")
+                self._log("WARNING", f"Unpair result: {result}")
                 return {"success": True, "message": f"Unpair command sent: {result}"}
         except Exception as e:
-            self._log("error", f"Unpair error: {e}")
+            self._log("ERROR", f"Unpair error: {e}")
             return {"success": False, "message": f"Unpair failed: {str(e)}"}
 
     def _check_pair_status(self, mac):
@@ -1721,7 +1761,7 @@ default-agent
             )
             return {"paired": paired, "connected": connected}
         except Exception as e:
-            self._log("error", f"Pair status check error: {e}")
+            self._log("ERROR", f"Pair status check error: {e}")
             return {"paired": False, "connected": False}
 
     def _invalidate_status_cache(self):
@@ -1850,7 +1890,7 @@ default-agent
             return status
 
         except Exception as e:
-            self._log("error", f"Connection status check error: {e}")
+            self._log("ERROR", f"Connection status check error: {e}")
             status = {
                 "paired": False,
                 "trusted": False,
@@ -1875,7 +1915,7 @@ default-agent
             time.sleep(1)
 
             # Start scanning
-            self._log("info", "Starting scan...")
+            self._log("INFO", "Starting scan...")
             # Use subprocess directly to prevent [CHG] messages in logs
             try:
                 subprocess.Popen(
@@ -1912,7 +1952,7 @@ default-agent
                             mac = parts[1]
                             name = parts[2] if len(parts) > 2 else "Unknown Device"
                             devices.append({"mac": mac, "name": name})
-                            self._log("info", f"Scan found: {name} ({mac})")
+                            self._log("INFO", f"Scan found: {name} ({mac})")
 
             logging.info(
                 f"[bt-tether-helper] Scan complete. Found {len(devices)} devices"
@@ -1920,7 +1960,7 @@ default-agent
             return devices
 
         except Exception as e:
-            self._log("error", f"Scan error: {e}")
+            self._log("ERROR", f"Scan error: {e}")
             return []
 
     def start_connection(self):
@@ -2005,9 +2045,9 @@ default-agent
                         )
                     return
 
-                self._log("info", "Pairing successful!")
+                self._log("INFO", "Pairing successful!")
             else:
-                self._log("info", "Device already paired")
+                self._log("INFO", "Device already paired")
                 with self.lock:
                     self.message = "Device already paired ✓"
 
@@ -2030,38 +2070,38 @@ default-agent
                 self.message = "Waiting for Bluetooth connection..."
 
             # Wait for Bluetooth connection to be established automatically after pairing
-            self._log("info", "Waiting for Bluetooth connection to establish...")
+            self._log("INFO", "Waiting for Bluetooth connection to establish...")
             connection_established = False
             for check in range(10):
                 time.sleep(2)
                 status = self._check_pair_status(mac)
                 if status["connected"]:
                     connection_established = True
-                    self._log("info", "✓ Bluetooth connection established!")
+                    self._log("INFO", "✓ Bluetooth connection established!")
                     break
-                self._log("info", f"Waiting for connection... ({(check+1)*2}s)")
+                self._log("INFO", f"Waiting for connection... ({(check+1)*2}s)")
 
             if not connection_established:
                 self._log(
-                    "warning",
+                    "WARNING",
                     "Bluetooth connection did not establish automatically after pairing",
                 )
                 self._log(
-                    "info", "This might be normal - will try NAP connection anyway"
+                    "INFO", "This might be normal - will try NAP connection anyway"
                 )
 
-            self._log("info", "Proceeding to NAP connection...")
+            self._log("INFO", "Proceeding to NAP connection...")
             with self.lock:
                 self.message = "Connecting to NAP profile for internet..."
 
             # Additional wait to ensure phone is ready for NAP connection
             self._log(
-                "info", "Waiting 5 seconds for phone to be ready for tethering..."
+                "INFO", "Waiting 5 seconds for phone to be ready for tethering..."
             )
             time.sleep(5)
 
             # Try to establish PAN connection
-            self._log("info", "Establishing PAN connection...")
+            self._log("INFO", "Establishing PAN connection...")
             with self.lock:
                 self.status = "CONNECTING"
                 self.message = "Connecting to NAP profile for internet..."
@@ -2081,25 +2121,25 @@ default-agent
                 if nap_connected:
                     break
                 else:
-                    self._log("warning", f"NAP attempt {retry + 1} failed")
+                    self._log("WARNING", f"NAP attempt {retry + 1} failed")
                     with self.lock:
                         self.message = f"NAP attempt {retry + 1}/3 failed..."
 
             if nap_connected:
-                self._log("info", "NAP connection successful!")
+                self._log("INFO", "NAP connection successful!")
 
                 # Check if PAN interface is up
                 if self._pan_active():
                     iface = self._get_pan_interface()
-                    self._log("info", f"✓ PAN interface active: {iface}")
+                    self._log("INFO", f"✓ PAN interface active: {iface}")
 
                     # Wait for interface initialization
-                    self._log("info", "Waiting for interface initialization...")
+                    self._log("INFO", "Waiting for interface initialization...")
                     time.sleep(2)
 
                     # Setup network with DHCP
                     if self._setup_network_dhcp(iface):
-                        self._log("info", "✓ Network setup successful")
+                        self._log("INFO", "✓ Network setup successful")
                     else:
                         self._log(
                             "warning",
@@ -2110,12 +2150,12 @@ default-agent
                     time.sleep(2)
 
                     # Verify internet connectivity
-                    self._log("info", "Checking internet connectivity...")
+                    self._log("INFO", "Checking internet connectivity...")
                     with self.lock:
                         self.message = "Verifying internet connection..."
 
                     if self._check_internet_connectivity():
-                        self._log("info", "✓ Internet connectivity verified!")
+                        self._log("INFO", "✓ Internet connectivity verified!")
                         self._connectivity_verified.set()  # Signal BLE thread
                         self._invalidate_status_cache()  # Invalidate before clearing flag
                         with self.lock:
@@ -2123,7 +2163,7 @@ default-agent
                             self.message = f"✓ Connected! Internet via {iface}"
                             self._connection_in_progress = False
                     else:
-                        self._log("warning", "No internet connectivity detected")
+                        self._log("WARNING", "No internet connectivity detected")
                         self._invalidate_status_cache()  # Invalidate before clearing flag
                         with self.lock:
                             self.status = "CONNECTED"
@@ -2132,14 +2172,14 @@ default-agent
                             )
                             self._connection_in_progress = False
                 else:
-                    self._log("warning", "NAP connected but no interface detected")
+                    self._log("WARNING", "NAP connected but no interface detected")
                     self._invalidate_status_cache()  # Invalidate before clearing flag
                     with self.lock:
                         self.status = "CONNECTED"
                         self.message = "Connected but no internet. Enable Bluetooth tethering on phone."
                         self._connection_in_progress = False
             else:
-                self._log("warning", "NAP connection failed")
+                self._log("WARNING", "NAP connection failed")
                 self._invalidate_status_cache()  # Invalidate before clearing flag
                 with self.lock:
                     self.status = "CONNECTED"
@@ -2147,10 +2187,10 @@ default-agent
                     self._connection_in_progress = False
 
         except Exception as e:
-            self._log("error", f"Connection thread error: {e}")
-            import traceback
+            self._log("ERROR", f"Connection thread error: {e}")
 
-            self._log("error", f"Traceback: {traceback.format_exc()}")
+
+            self._log("ERROR", f"Traceback: {traceback.format_exc()}")
             self._invalidate_status_cache()  # Invalidate before clearing flag
             with self.lock:
                 self.status = "ERROR"
@@ -2168,7 +2208,7 @@ default-agent
         """Remove ANSI color/control codes from text"""
         if not text:
             return text
-        import re
+
 
         # Remove ANSI escape sequences
         ansi_escape = re.compile(r"\x1b\[[0-9;]*[mGKHF]|\x01|\x02")
@@ -2223,10 +2263,10 @@ default-agent
                     timeout=5,  # Reduced timeout for RPi Zero W2
                 )
                 time.sleep(3)  # Extra time on slow hardware
-                self._log("info", "Bluetooth service restarted")
+                self._log("INFO", "Bluetooth service restarted")
                 return True
             except Exception as e:
-                self._log("error", f"Failed to restart Bluetooth: {e}")
+                self._log("ERROR", f"Failed to restart Bluetooth: {e}")
                 return False
         return True
 
@@ -2283,10 +2323,10 @@ default-agent
     def _setup_network_dhcp(self, iface):
         """Setup network for bnep0 interface using dhclient"""
         try:
-            self._log("info", f"Setting up network for {iface}...")
+            self._log("INFO", f"Setting up network for {iface}...")
 
             # Ensure interface is up
-            self._log("info", f"Ensuring {iface} is up...")
+            self._log("INFO", f"Ensuring {iface} is up...")
             subprocess.run(
                 ["sudo", "ip", "link", "set", iface, "up"],
                 stdout=subprocess.PIPE,
@@ -2298,17 +2338,17 @@ default-agent
             return self._setup_dhclient(iface)
 
         except subprocess.TimeoutExpired:
-            self._log("error", "Network setup timed out")
+            self._log("ERROR", "Network setup timed out")
             return False
         except Exception as e:
-            self._log("error", f"Network setup error: {e}")
+            self._log("ERROR", f"Network setup error: {e}")
             return False
 
     def _setup_dhclient(self, iface):
         """Setup interface using auto-configuration (skipping DHCP client check)"""
         try:
             # Try to actively request IP via DHCP
-            self._log("info", f"Requesting IP address via DHCP for {iface}...")
+            self._log("INFO", f"Requesting IP address via DHCP for {iface}...")
 
             # Kill any existing dhclient process for THIS interface only (not other interfaces)
             try:
@@ -2335,62 +2375,68 @@ default-agent
             dhcp_cmd = None
 
             # Check which DHCP client is available
+            # Prefer dhcpcd on Raspberry Pi as it's more reliable
             if (
-                subprocess.run(["which", "dhclient"], capture_output=True).returncode
-                == 0
-            ):
-                dhcp_cmd = [
-                    "sudo",
-                    "dhclient",
-                    "-nw",
-                    "-i",
-                    iface,
-                ]  # -nw: no wait, -i: specify interface explicitly
-            elif (
                 subprocess.run(["which", "dhcpcd"], capture_output=True).returncode == 0
             ):
                 dhcp_cmd = [
                     "sudo",
                     "dhcpcd",
-                    "-w",
+                    "-t", "10",  # 10 second timeout
                     iface,
-                ]  # -w: wait for IP assignment, daemon will handle existing leases
+                ]
+            elif (
+                subprocess.run(["which", "dhclient"], capture_output=True).returncode
+                == 0
+            ):
+                # Note: dhclient doesn't have -i flag, interface goes at end
+                dhcp_cmd = [
+                    "sudo",
+                    "dhclient",
+                    "-1",  # Try once and exit
+                    "-v",  # Verbose
+                    iface,
+                ]
             elif (
                 subprocess.run(["which", "udhcpc"], capture_output=True).returncode == 0
             ):
-                dhcp_cmd = ["sudo", "udhcpc", "-i", iface]
-
-            if dhcp_cmd:
-                self._log("info", f"Running DHCP client: {' '.join(dhcp_cmd)}")
-                dhcp_result = subprocess.run(
-                    dhcp_cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=15,  # Reduced timeout since -nw returns immediately
-                )
-                if dhcp_result.returncode == 0:
-                    self._log("info", "✓ DHCP request completed")
-                    dhcp_success = True
-                else:
-                    self._log(
-                        "warning", f"DHCP client returned code {dhcp_result.returncode}"
-                    )
-                    logging.debug(
-                        f"[bt-tether-helper] DHCP output: {dhcp_result.stdout}"
-                    )
-                    logging.debug(
-                        f"[bt-tether-helper] DHCP errors: {dhcp_result.stderr}"
-                    )
+                dhcp_cmd = ["sudo", "udhcpc", "-i", iface, "-n", "-q"]  # -n: no default, -q: quit after obtaining
             else:
                 self._log(
-                    "warning",
-                    "No DHCP client found (dhclient/dhcpcd/udhcpc), waiting for auto-configuration...",
+                    "WARNING",
+                    "No DHCP client found (dhcpcd/dhclient/udhcpc), waiting for auto-configuration...",
                 )
 
-            # Wait for IP assignment with retry logic (phone may take time to assign IP)
-            import re
+            # Actually run the DHCP client if we found one
+            if dhcp_cmd:
+                self._log("INFO", f"Running DHCP client: {' '.join(dhcp_cmd)}")
+                try:
+                    dhcp_result = subprocess.run(
+                        dhcp_cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=20,  # Hard timeout to prevent hangs
+                    )
+                    if dhcp_result.returncode == 0:
+                        self._log("INFO", "✓ DHCP request completed")
+                        dhcp_success = True
+                    else:
+                        self._log(
+                            "WARNING", f"DHCP client returned code {dhcp_result.returncode}"
+                        )
+                        logging.debug(
+                            f"[bt-tether-helper] DHCP output: {dhcp_result.stdout}"
+                        )
+                        logging.debug(
+                            f"[bt-tether-helper] DHCP errors: {dhcp_result.stderr}"
+                        )
+                except subprocess.TimeoutExpired:
+                    self._log("WARNING", "DHCP client timed out after 20s, continuing anyway...")
+                except Exception as dhcp_err:
+                    self._log("WARNING", f"DHCP client error: {dhcp_err}")
 
+            # Wait for IP assignment with retry logic (phone may take time to assign IP)
             ip_addr = None
             max_retries = 10  # Wait up to 20 seconds for IP (10 attempts × 2 seconds)
 
@@ -2463,16 +2509,13 @@ default-agent
                     break
 
             if ip_addr:
-                # Add default route through this interface if none exists
-                self._setup_default_route(iface)
-
                 # Verify localhost routing
                 self._verify_localhost_route()
 
                 return True
             else:
                 self._log(
-                    "error",
+                    "ERROR",
                     f"❌ No IP on {iface} - Bluetooth tethering not active. Check phone settings!",
                 )
                 logging.error(
@@ -2486,73 +2529,6 @@ default-agent
         except Exception as e:
             logging.error(f"[bt-tether-helper] dhclient fallback error: {e}")
             return False
-
-    def _setup_default_route(self, iface):
-        """Adjust route metric for tether interface to avoid overriding existing connections"""
-        try:
-            # Wait for dhclient to add the route (it runs asynchronously with -nw flag)
-            # Retry up to 5 times with 1 second delay
-            gateway = None
-            for attempt in range(5):
-                result = subprocess.run(
-                    ["ip", "route", "show", "default", "dev", iface],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=5,
-                )
-
-                if result.returncode == 0 and result.stdout.strip():
-                    # Extract gateway from existing route
-                    import re
-                    gateway_match = re.search(r'via\s+(\d+\.\d+\.\d+\.\d+)', result.stdout)
-                    
-                    if gateway_match:
-                        gateway = gateway_match.group(1)
-                        logging.info(f"[bt-tether-helper] Found default route via {gateway} on {iface}")
-                        break
-                
-                # Route not found yet, wait and retry
-                if attempt < 4:
-                    time.sleep(1)
-                    logging.debug(f"[bt-tether-helper] Waiting for default route to appear (attempt {attempt + 1}/5)...")
-            
-            if gateway:
-                # Delete the existing route without metric
-                try:
-                    subprocess.run(
-                        ["sudo", "ip", "route", "del", "default", "via", gateway, "dev", iface],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=5,
-                    )
-                    logging.info(f"[bt-tether-helper] Removed default route without metric")
-                except Exception as e:
-                    logging.debug(f"[bt-tether-helper] Route deletion: {e}")
-                
-                # Add route with higher metric (200) to not override eth/usb connections
-                try:
-                    subprocess.run(
-                        ["sudo", "ip", "route", "add", "default", "via", gateway, "dev", iface, "metric", "200"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=5,
-                    )
-                    logging.info(f"[bt-tether-helper] ✓ Added default route with metric 200 (lower priority than eth/usb)")
-                except Exception as e:
-                    logging.warning(f"[bt-tether-helper] Failed to add route with metric: {e}")
-                    # Re-add original route if metric addition failed
-                    subprocess.run(
-                        ["sudo", "ip", "route", "add", "default", "via", gateway, "dev", iface],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=5,
-                    )
-            else:
-                logging.info(f"[bt-tether-helper] No default route found for {iface} after waiting")
-
-        except Exception as e:
-            logging.debug(f"[bt-tether-helper] Route setup note: {e}")
 
     def _is_monitor_mode_active(self):
         """Check if monitor mode (mon0) is currently active"""
@@ -2666,52 +2642,17 @@ default-agent
         try:
             logging.info(f"[bt-tether-helper] Setting up routing for {iface}...")
 
-            # First, request IP via DHCP
-            logging.info(f"[bt-tether-helper] Requesting IP via DHCP on {iface}...")
+            # DHCP is handled by _setup_dhclient, just ensure interface is up
+            logging.info(f"[bt-tether-helper] Ensuring {iface} is up for routing...")
             try:
-                # Try dhcpcd first (common on Raspberry Pi)
-                result = subprocess.run(
-                    [
-                        "sudo",
-                        "dhcpcd",
-                        "-w",
-                        iface,
-                    ],  # -w: wait for IP, daemon handles existing leases
+                subprocess.run(
+                    ["sudo", "ip", "link", "set", iface, "up"],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=15,
+                    timeout=5,
                 )
-                if result.returncode == 0:
-                    logging.info(
-                        f"[bt-tether-helper] DHCP request via dhcpcd successful"
-                    )
-                else:
-                    # Try dhclient as fallback
-                    logging.info(
-                        f"[bt-tether-helper] dhcpcd failed, trying dhclient..."
-                    )
-                    result = subprocess.run(
-                        [
-                            "sudo",
-                            "dhclient",
-                            "-nw",
-                            "-i",
-                            iface,
-                        ],  # -nw: no wait, -i: specify interface explicitly
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        timeout=10,  # Reduced timeout since -nw returns immediately
-                    )
-                    if result.returncode == 0:
-                        logging.info(
-                            f"[bt-tether-helper] DHCP request via dhclient successful"
-                        )
-            except subprocess.TimeoutExpired:
-                logging.warning(f"[bt-tether-helper] DHCP request timed out")
-            except Exception as dhcp_err:
-                logging.warning(f"[bt-tether-helper] DHCP request failed: {dhcp_err}")
+            except Exception as e:
+                logging.warning(f"[bt-tether-helper] Failed to bring up {iface}: {e}")
 
             # Wait for IP to be assigned
             time.sleep(2)
@@ -2726,7 +2667,7 @@ default-agent
             )
 
             # Extract IP and calculate gateway (usually .1 on the subnet)
-            import re
+
 
             ip_match = re.search(r"inet (\d+\.\d+\.\d+)\.(\d+)/", ip_result.stdout)
             if ip_match:
@@ -2848,7 +2789,7 @@ default-agent
                     timeout=5,
                 )
                 if gateway_check.returncode == 0 and gateway_check.stdout:
-                    import re
+
 
                     match = re.search(r"default via ([\d.]+)", gateway_check.stdout)
                     if match:
@@ -2921,7 +2862,7 @@ default-agent
 
             # Parse default route lines to find the one with lowest metric
             # Format: "default via 192.168.1.1 dev eth0 metric 100"
-            import re
+
 
             routes = []
             for line in result.strip().split("\n"):
@@ -3019,7 +2960,7 @@ default-agent
                     timeout=5,
                 )
                 if ip_result.returncode == 0:
-                    import re
+
 
                     ip_match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", ip_result.stdout)
                     if ip_match:
@@ -3110,7 +3051,7 @@ default-agent
     def _get_interface_ip(self, iface):
         """Get IP address of a network interface"""
         try:
-            import re
+
 
             result = subprocess.check_output(
                 ["ip", "-4", "addr", "show", iface], text=True, timeout=5
@@ -3153,7 +3094,7 @@ default-agent
                 ["ip", "addr", "show", iface], text=True, timeout=5
             )
             # Look for "inet " followed by an IP address (not 169.254.x.x which is link-local)
-            import re
+
 
             ip_match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", result)
             if ip_match:
@@ -3279,7 +3220,7 @@ default-agent
                 env["NO_COLOR"] = "1"
                 env["TERM"] = "dumb"
 
-                import re
+
 
                 # Start pairing process
                 process = subprocess.Popen(
@@ -3437,7 +3378,7 @@ default-agent
 
         except Exception as e:
             self._log("ERROR", f"Device name update error: {e}")
-            import traceback
+
 
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
 
@@ -3524,7 +3465,7 @@ default-agent
             )
         except Exception as e:
             self._log("ERROR", f"Failed to update device name: {e}")
-            import traceback
+
 
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
 
@@ -3671,7 +3612,7 @@ default-agent
                 f"[bt-tether-helper] NAP connection error: {type(e).__name__}: {e}"
             )
 
-            import traceback
+
 
             logging.error(f"[bt-tether-helper] Traceback: {traceback.format_exc()}")
             return False
