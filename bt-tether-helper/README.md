@@ -172,8 +172,9 @@ main.plugins.bt-tether-helper.advertise_ip = false  # Show IP in Bluetooth devic
 **Compact Status (`show_on_screen`):**
 
 - Shows single-letter status in top-right corner
-- **C** = Connected with internet
-- **N** = Connected but no internet
+- **C** = Connected with internet (PAN active)
+- **T** = Connected and trusted (no internet yet)
+- **N** = Connected but not trusted
 - **P** = Paired but not connected
 - **D** = Disconnected
 - **>** = Connecting/Pairing in progress
@@ -183,10 +184,11 @@ main.plugins.bt-tether-helper.advertise_ip = false  # Show IP in Bluetooth devic
 
 - Shows full status at configurable position (default: [0, 82])
 - **BT:10.199.236.17** = Connected with IP address
-- **BT:Connected** = Connected but no IP detected
-- **BT:Paired+Trusted** = Paired and trusted, ready to connect
-- **BT:Paired** = Only paired, not trusted
+- **BT:Trusted** = Connected and trusted but no IP yet
+- **BT:Connected** = Connected but not trusted
+- **BT:Paired** = Paired but not connected
 - **BT:Connecting...** = Connection in progress
+- **BT:Disconnecting...** = Disconnection in progress
 - **BT:Disconnected** = Not connected
 
 ### Auto-Reconnect
@@ -305,7 +307,7 @@ GPL3
 
 ## Version
 
-0.9.0-beta
+0.9.9-beta
 
 ## Support
 

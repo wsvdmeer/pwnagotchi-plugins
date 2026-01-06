@@ -2410,29 +2410,52 @@ default-agent
                     timeout=3,
                 )
                 time.sleep(0.5)
-                # Request new lease
-                result = subprocess.run(
-                    ["sudo", "dhclient", "-4", "-v", iface],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=30,
-                )
-                combined = f"{result.stdout} {result.stderr}".strip()
-                if combined:
-                    self._log("INFO", f"dhclient: {combined[:200]}")
-                if result.returncode == 0:
-                    dhcp_success = True
-                else:
-                    self._log("WARNING", f"dhclient returned {result.returncode}")
+                
+                # Request new lease with better error handling
+                try:
+                    result = subprocess.run(
+                        ["sudo", "dhclient", "-4", "-v", iface],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                    )
+                    combined = f"{result.stdout} {result.stderr}".strip()
+                    
+                    # Check for common error messages
+                    if "Network error: Software caused connection abort" in combined:
+                        self._log("WARNING", "dhclient: Connection aborted by phone")
+                        self._log("WARNING", "📱 Make sure Bluetooth tethering is ENABLED on your phone!")
+                        self._log("WARNING", "📱 Settings → Network → Hotspot & tethering → Bluetooth tethering")
+                    elif "DHCPDISCOVER" in combined and "No DHCPOFFERS" in combined:
+                        self._log("WARNING", "dhclient: No DHCP response from phone")
+                        self._log("WARNING", "📱 Phone is not providing DHCP - enable Bluetooth tethering!")
+                    elif combined:
+                        # Truncate long output
+                        self._log("INFO", f"dhclient: {combined[:200]}")
+                    
+                    if result.returncode == 0:
+                        dhcp_success = True
+                    else:
+                        self._log("WARNING", f"dhclient returned {result.returncode}")
+                        
+                except subprocess.TimeoutExpired:
+                    self._log("WARNING", "dhclient timed out after 30s")
+                    # Kill hung dhclient
+                    subprocess.run(
+                        ["sudo", "pkill", "-9", "-f", f"dhclient.*{iface}"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=3,
+                    )
 
             else:
                 self._log("ERROR", "No DHCP client found! Install dhclient: sudo apt install isc-dhcp-client")
                 return False
 
-            # Check for IP
+            # Check for IP with extended wait time (tethering may take time to fully start)
             ip_addr = None
-            max_checks = 5
+            max_checks = 8  # Increased from 5 to give more time
 
             for attempt in range(max_checks):
                 ip_result = subprocess.run(
@@ -2453,19 +2476,20 @@ default-agent
                             self._log("INFO", f"✓ {iface} got IP: {ip_addr}")
                             break
                         else:
+                            self._log("DEBUG", f"Link-local IP {ip_addr}, waiting for DHCP...")
                             ip_addr = None
 
                 if attempt < max_checks - 1:
+                    self._log("DEBUG", f"Waiting for IP... ({(attempt+1)*2}s)")
                     time.sleep(2)
 
             if ip_addr:
                 self._verify_localhost_route()
                 return True
             else:
-                self._log(
-                    "ERROR",
-                    f"❌ No IP on {iface} - Enable Bluetooth tethering on phone!",
-                )
+                self._log("ERROR", f"❌ No IP on {iface} after {max_checks * 2}s")
+                self._log("ERROR", "📱 Enable Bluetooth tethering on your phone!")
+                self._log("ERROR", "📱 Settings → Network & internet → Hotspot & tethering → Bluetooth tethering")
                 return False
 
         except Exception as e:
