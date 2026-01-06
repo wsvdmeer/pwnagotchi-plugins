@@ -669,7 +669,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "0.9.8-beta"
+    __version__ = "0.9.9-beta"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -760,7 +760,7 @@ class BTTetherHelper(Plugin):
 
         # Track if initialization has been done (to prevent double-init from fallback)
         self._initialization_done = threading.Event()
-        
+
         # Track fallback thread for cleanup
         self._fallback_thread = None
 
@@ -857,7 +857,6 @@ class BTTetherHelper(Plugin):
             self._log("INFO", "Bluetooth services initialized")
         except Exception as e:
             self._log("ERROR", f"Failed to initialize Bluetooth services: {e}")
-
 
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
 
@@ -1392,7 +1391,6 @@ default-agent
                             ):
                                 # Extract passkey number (usually 6 digits)
 
-
                                 passkey_match = re.search(
                                     r"passkey\s+(\d{6})", clean_line, re.IGNORECASE
                                 )
@@ -1550,7 +1548,6 @@ default-agent
 
     def _validate_mac(self, mac):
         """Validate MAC address format"""
-
 
         return bool(re.match(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$", mac))
 
@@ -2189,7 +2186,6 @@ default-agent
         except Exception as e:
             self._log("ERROR", f"Connection thread error: {e}")
 
-
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
             self._invalidate_status_cache()  # Invalidate before clearing flag
             with self.lock:
@@ -2208,7 +2204,6 @@ default-agent
         """Remove ANSI color/control codes from text"""
         if not text:
             return text
-
 
         # Remove ANSI escape sequences
         ansi_escape = re.compile(r"\x1b\[[0-9;]*[mGKHF]|\x01|\x02")
@@ -2376,13 +2371,12 @@ default-agent
 
             # Check which DHCP client is available
             # Prefer dhcpcd on Raspberry Pi as it's more reliable
-            if (
-                subprocess.run(["which", "dhcpcd"], capture_output=True).returncode == 0
-            ):
+            if subprocess.run(["which", "dhcpcd"], capture_output=True).returncode == 0:
                 dhcp_cmd = [
                     "sudo",
                     "dhcpcd",
-                    "-t", "10",  # 10 second timeout
+                    "-t",
+                    "10",  # 10 second timeout
                     iface,
                 ]
             elif (
@@ -2400,7 +2394,14 @@ default-agent
             elif (
                 subprocess.run(["which", "udhcpc"], capture_output=True).returncode == 0
             ):
-                dhcp_cmd = ["sudo", "udhcpc", "-i", iface, "-n", "-q"]  # -n: no default, -q: quit after obtaining
+                dhcp_cmd = [
+                    "sudo",
+                    "udhcpc",
+                    "-i",
+                    iface,
+                    "-n",
+                    "-q",
+                ]  # -n: no default, -q: quit after obtaining
             else:
                 self._log(
                     "WARNING",
@@ -2423,7 +2424,8 @@ default-agent
                         dhcp_success = True
                     else:
                         self._log(
-                            "WARNING", f"DHCP client returned code {dhcp_result.returncode}"
+                            "WARNING",
+                            f"DHCP client returned code {dhcp_result.returncode}",
                         )
                         logging.debug(
                             f"[bt-tether-helper] DHCP output: {dhcp_result.stdout}"
@@ -2432,7 +2434,10 @@ default-agent
                             f"[bt-tether-helper] DHCP errors: {dhcp_result.stderr}"
                         )
                 except subprocess.TimeoutExpired:
-                    self._log("WARNING", "DHCP client timed out after 20s, continuing anyway...")
+                    self._log(
+                        "WARNING",
+                        "DHCP client timed out after 20s, continuing anyway...",
+                    )
                 except Exception as dhcp_err:
                     self._log("WARNING", f"DHCP client error: {dhcp_err}")
 
@@ -2668,7 +2673,6 @@ default-agent
 
             # Extract IP and calculate gateway (usually .1 on the subnet)
 
-
             ip_match = re.search(r"inet (\d+\.\d+\.\d+)\.(\d+)/", ip_result.stdout)
             if ip_match:
                 subnet = ip_match.group(1)
@@ -2790,7 +2794,6 @@ default-agent
                 )
                 if gateway_check.returncode == 0 and gateway_check.stdout:
 
-
                     match = re.search(r"default via ([\d.]+)", gateway_check.stdout)
                     if match:
                         gateway = match.group(1)
@@ -2862,7 +2865,6 @@ default-agent
 
             # Parse default route lines to find the one with lowest metric
             # Format: "default via 192.168.1.1 dev eth0 metric 100"
-
 
             routes = []
             for line in result.strip().split("\n"):
@@ -2961,7 +2963,6 @@ default-agent
                 )
                 if ip_result.returncode == 0:
 
-
                     ip_match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", ip_result.stdout)
                     if ip_match:
                         result["bnep0_ip"] = ip_match.group(1)
@@ -3052,7 +3053,6 @@ default-agent
         """Get IP address of a network interface"""
         try:
 
-
             result = subprocess.check_output(
                 ["ip", "-4", "addr", "show", iface], text=True, timeout=5
             )
@@ -3094,7 +3094,6 @@ default-agent
                 ["ip", "addr", "show", iface], text=True, timeout=5
             )
             # Look for "inet " followed by an IP address (not 169.254.x.x which is link-local)
-
 
             ip_match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", result)
             if ip_match:
@@ -3219,8 +3218,6 @@ default-agent
                 env = dict(os.environ)
                 env["NO_COLOR"] = "1"
                 env["TERM"] = "dumb"
-
-
 
                 # Start pairing process
                 process = subprocess.Popen(
@@ -3379,7 +3376,6 @@ default-agent
         except Exception as e:
             self._log("ERROR", f"Device name update error: {e}")
 
-
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
 
     def _get_current_ip(self):
@@ -3465,7 +3461,6 @@ default-agent
             )
         except Exception as e:
             self._log("ERROR", f"Failed to update device name: {e}")
-
 
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
 
@@ -3611,8 +3606,6 @@ default-agent
             logging.error(
                 f"[bt-tether-helper] NAP connection error: {type(e).__name__}: {e}"
             )
-
-
 
             logging.error(f"[bt-tether-helper] Traceback: {traceback.format_exc()}")
             return False
