@@ -1967,19 +1967,31 @@ default-agent
                 self.message = "No MAC address set"
                 return
 
-            if self.status in ["PAIRING", "CONNECTING"]:
+            # Check if connection is already in progress (prevents multiple threads)
+            if self._connection_in_progress:
+                self._log(
+                    "WARNING",
+                    "Connection already in progress, ignoring duplicate request",
+                )
                 self.message = "Connection already in progress"
                 return
 
-        # Reset failure counter and user disconnect flag on manual reconnect
+            if self.status in ["PAIRING", "CONNECTING"]:
+                self._log(
+                    "WARNING", "Already pairing/connecting, ignoring duplicate request"
+                )
+                self.message = "Connection already in progress"
+                return
+
+            # Set flag INSIDE the lock to prevent race condition
+            self._connection_in_progress = True
+            self._user_requested_disconnect = False  # Re-enable auto-reconnect
+
+        # Reset failure counter on manual reconnect
         self._reconnect_failure_count = 0
 
         # Invalidate status cache to get fresh status during connection
         self._invalidate_status_cache()
-
-        with self.lock:
-            self._user_requested_disconnect = False  # Re-enable auto-reconnect
-            self._connection_in_progress = True
 
         threading.Thread(target=self._connect_thread, daemon=True).start()
 
@@ -2340,24 +2352,14 @@ default-agent
             return False
 
     def _setup_dhclient(self, iface):
-        """Setup interface using auto-configuration (skipping DHCP client check)"""
+        """Wait for auto-configuration on the interface - minimal intervention approach"""
         try:
-            # Try to actively request IP via DHCP
-            self._log("INFO", f"Requesting IP address via DHCP for {iface}...")
+            self._log(
+                "INFO", f"Waiting for {iface} to get IP via auto-configuration..."
+            )
 
-            # Kill any existing dhclient process for THIS interface only (not other interfaces)
-            try:
-                subprocess.run(
-                    ["sudo", "pkill", "-f", f"dhclient.*{iface}"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=2,
-                )
-                time.sleep(0.5)
-            except Exception:
-                pass
-
-            # Ensure interface is up
+            # Just ensure interface is up - that's all we need to do
+            # The system's dhcpcd daemon or NetworkManager will handle DHCP automatically
             subprocess.run(
                 ["sudo", "ip", "link", "set", iface, "up"],
                 stdout=subprocess.PIPE,
@@ -2365,90 +2367,17 @@ default-agent
                 timeout=5,
             )
 
-            # Try dhclient first (most common)
-            dhcp_success = False
-            dhcp_cmd = None
-
-            # Check which DHCP client is available
-            # Prefer dhcpcd on Raspberry Pi as it's more reliable
-            if subprocess.run(["which", "dhcpcd"], capture_output=True).returncode == 0:
-                dhcp_cmd = [
-                    "sudo",
-                    "dhcpcd",
-                    "-t",
-                    "10",  # 10 second timeout
-                    iface,
-                ]
-            elif (
-                subprocess.run(["which", "dhclient"], capture_output=True).returncode
-                == 0
-            ):
-                # Note: dhclient doesn't have -i flag, interface goes at end
-                dhcp_cmd = [
-                    "sudo",
-                    "dhclient",
-                    "-1",  # Try once and exit
-                    "-v",  # Verbose
-                    iface,
-                ]
-            elif (
-                subprocess.run(["which", "udhcpc"], capture_output=True).returncode == 0
-            ):
-                dhcp_cmd = [
-                    "sudo",
-                    "udhcpc",
-                    "-i",
-                    iface,
-                    "-n",
-                    "-q",
-                ]  # -n: no default, -q: quit after obtaining
-            else:
-                self._log(
-                    "WARNING",
-                    "No DHCP client found (dhcpcd/dhclient/udhcpc), waiting for auto-configuration...",
-                )
-
-            # Actually run the DHCP client if we found one
-            if dhcp_cmd:
-                self._log("INFO", f"Running DHCP client: {' '.join(dhcp_cmd)}")
-                try:
-                    dhcp_result = subprocess.run(
-                        dhcp_cmd,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        text=True,
-                        timeout=20,  # Hard timeout to prevent hangs
-                    )
-                    if dhcp_result.returncode == 0:
-                        self._log("INFO", "✓ DHCP request completed")
-                        dhcp_success = True
-                    else:
-                        self._log(
-                            "WARNING",
-                            f"DHCP client returned code {dhcp_result.returncode}",
-                        )
-                        logging.debug(
-                            f"[bt-tether-helper] DHCP output: {dhcp_result.stdout}"
-                        )
-                        logging.debug(
-                            f"[bt-tether-helper] DHCP errors: {dhcp_result.stderr}"
-                        )
-                except subprocess.TimeoutExpired:
-                    self._log(
-                        "WARNING",
-                        "DHCP client timed out after 20s, continuing anyway...",
-                    )
-                except Exception as dhcp_err:
-                    self._log("WARNING", f"DHCP client error: {dhcp_err}")
-
-            # Wait for IP assignment with retry logic (phone may take time to assign IP)
+            # Wait for IP assignment - the system should handle DHCP automatically
+            # dhcpcd daemon on Raspberry Pi auto-configures new interfaces
             ip_addr = None
-            max_retries = 10  # Wait up to 20 seconds for IP (10 attempts × 2 seconds)
+            max_retries = (
+                15  # Wait up to 30 seconds for auto-config (15 attempts × 2 seconds)
+            )
 
             for attempt in range(max_retries):
                 time.sleep(2)
 
-                # First check if interface exists at all (without -4 filter)
+                # Check if interface exists
                 iface_check = subprocess.run(
                     ["ip", "link", "show", iface],
                     stdout=subprocess.PIPE,
@@ -2462,10 +2391,9 @@ default-agent
                         logging.error(
                             f"[bt-tether-helper] Interface {iface} does not exist!"
                         )
-                        logging.error(f"[bt-tether-helper] Error: {iface_check.stderr}")
-                    break
+                    continue
 
-                # Now check for IPv4 address
+                # Check for IPv4 address
                 ip_result = subprocess.run(
                     ["ip", "addr", "show", iface],
                     stdout=subprocess.PIPE,
@@ -2475,64 +2403,51 @@ default-agent
                 )
 
                 if ip_result.returncode == 0:
-                    # Log the actual output for debugging
-                    logging.debug(
-                        f"[bt-tether-helper] ip addr output for {iface}:\n{ip_result.stdout}"
-                    )
-
-                    # Check if interface is UP
-                    is_up = "state UP" in ip_result.stdout or ",UP," in ip_result.stdout
-
                     ip_match = re.search(
                         r"inet\s+(\d+\.\d+\.\d+\.\d+)", ip_result.stdout
                     )
                     if ip_match:
                         ip_addr = ip_match.group(1)
-                        logging.info(
-                            f"[bt-tether-helper] ✓ {iface} IP address: {ip_addr}"
-                        )
-                        break
-                    else:
-                        # Only log every 5 attempts to reduce spam
-                        if attempt % 5 == 0 or attempt == max_retries - 1:
-                            self._log(
-                                "info",
-                                f"Waiting for IP assignment... ({attempt + 1}/{max_retries})",
-                            )
-                            # On last attempt, show what we actually see
-                            if attempt == max_retries - 1:
-                                logging.info(
-                                    f"[bt-tether-helper] Full ip addr show {iface} output:\n{ip_result.stdout}"
-                                )
-                                logging.info(
-                                    f"[bt-tether-helper] Interface UP state: {is_up}"
-                                )
-                else:
+                        # Exclude link-local addresses
+                        if not ip_addr.startswith("169.254."):
+                            self._log("INFO", f"✓ {iface} got IP: {ip_addr}")
+                            break
+                        else:
+                            ip_addr = None  # Ignore link-local, keep waiting
+
+                # Log progress occasionally
+                if attempt % 5 == 0:
                     self._log(
-                        "warning", f"Failed to check {iface} status: {ip_result.stderr}"
+                        "INFO", f"Waiting for IP... ({attempt + 1}/{max_retries})"
                     )
-                    break
+
+                # On attempt 10, if still no IP, try to trigger dhcpcd (non-invasive)
+                if attempt == 10 and not ip_addr:
+                    self._log("INFO", "No IP yet, nudging dhcpcd...")
+                    try:
+                        # Just rebind this specific interface, don't touch anything else
+                        subprocess.run(
+                            ["sudo", "dhcpcd", "-n", iface],  # -n = notify/rebind
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=5,
+                        )
+                    except Exception:
+                        pass  # Ignore if dhcpcd not available
 
             if ip_addr:
-                # Verify localhost routing
+                # Just verify localhost is still working (safety check)
                 self._verify_localhost_route()
-
                 return True
             else:
                 self._log(
                     "ERROR",
-                    f"❌ No IP on {iface} - Bluetooth tethering not active. Check phone settings!",
-                )
-                logging.error(
-                    f"[bt-tether-helper] No IP address assigned to {iface} after {max_retries} attempts (30s)"
+                    f"❌ No IP on {iface} - Enable Bluetooth tethering on phone!",
                 )
                 return False
 
-        except subprocess.TimeoutExpired:
-            logging.error(f"[bt-tether-helper] dhclient timed out")
-            return False
         except Exception as e:
-            logging.error(f"[bt-tether-helper] dhclient fallback error: {e}")
+            logging.error(f"[bt-tether-helper] Network setup error: {e}")
             return False
 
     def _is_monitor_mode_active(self):
@@ -2605,6 +2520,88 @@ default-agent
             logging.error(
                 f"[bt-tether-helper] Localhost route verification failed: {e}"
             )
+
+    def _protect_existing_routes(self, bt_iface):
+        """Ensure existing interfaces (usb0, eth0) still have valid routes after DHCP on Bluetooth"""
+        try:
+            # Check if usb0 exists and should have a route (common for USB gadget mode)
+            for iface in ["usb0", "eth0"]:
+                try:
+                    # Check if interface exists and has IP
+                    result = subprocess.run(
+                        ["ip", "addr", "show", iface],
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
+                    )
+                    if result.returncode != 0:
+                        continue  # Interface doesn't exist
+
+                    # Check if it has an IP
+                    ip_match = re.search(
+                        r"inet\s+(\d+\.\d+\.\d+)\.(\d+)", result.stdout
+                    )
+                    if not ip_match:
+                        continue  # No IP assigned
+
+                    subnet = ip_match.group(1)
+                    gateway = f"{subnet}.1"
+
+                    # Check if route exists for this interface
+                    route_check = subprocess.run(
+                        ["ip", "route", "show", "dev", iface],
+                        capture_output=True,
+                        text=True,
+                        timeout=3,
+                    )
+
+                    if route_check.returncode == 0 and route_check.stdout.strip():
+                        logging.debug(f"[bt-tether-helper] Route for {iface} OK")
+                    else:
+                        # Route may have been removed by DHCP, restore it
+                        logging.warning(
+                            f"[bt-tether-helper] Restoring route for {iface}..."
+                        )
+                        subprocess.run(
+                            [
+                                "sudo",
+                                "ip",
+                                "route",
+                                "add",
+                                f"{subnet}.0/24",
+                                "dev",
+                                iface,
+                            ],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=3,
+                        )
+                        # Add default route with higher metric so it doesn't override BT
+                        subprocess.run(
+                            [
+                                "sudo",
+                                "ip",
+                                "route",
+                                "add",
+                                "default",
+                                "via",
+                                gateway,
+                                "dev",
+                                iface,
+                                "metric",
+                                "50",
+                            ],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=3,
+                        )
+                        logging.info(f"[bt-tether-helper] ✓ Route for {iface} restored")
+
+                except Exception as e:
+                    logging.debug(f"[bt-tether-helper] Route check for {iface}: {e}")
+
+        except Exception as e:
+            logging.warning(f"[bt-tether-helper] Route protection check failed: {e}")
 
     def _log_network_config(self, iface):
         """Log current network configuration for debugging - optimized for RPi Zero W2"""
