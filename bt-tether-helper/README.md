@@ -4,17 +4,7 @@ A comprehensive Bluetooth tethering plugin that provides guided setup and automa
 
 ![bt-tether-helper Web Interface](ui.png)
 
-> **⚠️ IMPORTANT - Known Issues:** The main branch has known issues with network routing that can interfere with existing network connections. **Please use the development branch instead:**
->
-> **Use this branch:** [feature/0.9.0-beta](https://github.com/wsvdmeer/pwnagotchi-plugins/tree/feature/0.9.0-beta)
->
-> This branch includes fixes for:
->
-> - DHCP conflicts with existing network interfaces
-> - Routing metric issues that override primary connections
-> - Interface-specific DHCP client isolation
-
-> **🚧 Work in Progress:** This plugin is currently in **beta** and under active development. Features and functionality may change.
+> **🚧 Work in Progress:** This plugin is currently under active development. Features and functionality may change.
 
 > **⚠️ Important:** This plugin has been tested on an **Android 15** and **iOS 26.1** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
 
@@ -37,7 +27,6 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 - **Device Scanning**: Scan for nearby Bluetooth devices to find and copy MAC addresses
 - **Status Display**: Real-time connection status on Pwnagotchi screen
 - **PAN (Personal Area Network) Support**: Automatic network interface configuration
-- **IP Advertising**: Optional Bluetooth device name updates with IP address (useful for headless operation)
 
 ## Installation
 
@@ -59,7 +48,7 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
    main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"
    ```
 
-   > See [Configuration Options](#configuration-options) for additional settings (display, auto-reconnect, IP advertising, etc.)
+   > See [Configuration Options](#configuration-options) for additional settings (display, auto-reconnect, etc.)
 
 4. Restart Pwnagotchi:
    ```bash
@@ -174,8 +163,10 @@ main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every 
 - **T** = Connected and trusted (no internet yet)
 - **N** = Connected but not trusted
 - **P** = Paired but not connected
-- **D** = Disconnected
+- **D** = Disconnecting (in progress)
+- **U** = Untrusting (removing trust)
 - **>** = Connecting/Pairing in progress
+- **X** = Disconnected (fully disconnected)
 - **?** = Unknown/Error
 
 **Detailed Status (`show_detailed_status`):**
@@ -188,7 +179,9 @@ main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every 
 - **BT:Paired** = Paired but not connected
 - **BT:Connecting...** = Connection in progress
 - **BT:Disconnecting...** = Disconnection in progress
+- **BT:Untrusting...** = Removing trust from device
 - **BT:Disconnected** = Not connected
+- **BT:Error** = Error/unknown state
 
 ### Auto-Reconnect
 
@@ -200,23 +193,6 @@ The plugin includes automatic reconnection monitoring:
 - **Non-intrusive**: Won't interfere with manual connection/disconnection operations
 
 To disable auto-reconnect, set `main.plugins.bt-tether-helper.auto_reconnect = false` in your config.
-
-## IP Advertising (Headless Mode)
-
-For headless operation, the plugin can update your Bluetooth adapter's device name to include the current IP address, making it easy to find your Pwnagotchi's IP without SSH or display access.
-
-### What is shown
-
-- **Device Name**: Your Pwnagotchi name (from `main.name` in config.toml)
-- **IP Address**: Current IP address from active interface (Bluetooth, USB, WiFi, or Ethernet)
-- **Format**: `{pwnagotchi_name} | {ip_address}`
-
-### How to view
-
-The device will show up in your phone's Bluetooth settings with the updated name:
-
-- **Android**: Settings → Bluetooth
-- **iOS**: Settings → Bluetooth
 
 ## Troubleshooting
 
