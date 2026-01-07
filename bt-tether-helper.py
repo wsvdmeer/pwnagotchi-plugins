@@ -684,6 +684,19 @@ class BTTetherHelper(Plugin):
     PROCESS_CLEANUP_DELAY = 0.2
     DBUS_OPERATION_RETRY_DELAY = 0.1
     NAME_UPDATE_INTERVAL = 30
+    AGENT_LOG_MONITOR_TIMEOUT = 90  # Seconds to monitor agent log for passkey
+    FALLBACK_INIT_TIMEOUT = 15  # Seconds to wait for on_ready() before fallback init
+    PAN_INTERFACE_WAIT = 2  # Seconds to wait for PAN interface after connection
+    INTERNET_VERIFY_WAIT = 2  # Seconds to wait before verifying internet connectivity
+
+    # Reconnect configuration constants
+    DEFAULT_RECONNECT_INTERVAL = 60  # Default seconds between reconnect checks
+    MAX_RECONNECT_FAILURES = 5  # Max consecutive failures before cooldown
+    DEFAULT_RECONNECT_FAILURE_COOLDOWN = 300  # Default cooldown in seconds (5 minutes)
+
+    # Cache and buffer constants
+    STATUS_CACHE_TTL = 5  # Seconds to cache status to reduce bluetoothctl polling
+    UI_LOG_MAXLEN = 100  # Maximum number of log messages in UI buffer
 
     def on_loaded(self):
         """Initialize plugin configuration and data structures only - no heavy operations"""
@@ -699,8 +712,8 @@ class BTTetherHelper(Plugin):
         self.agent_log_path = None  # Path to agent log file
         self.current_passkey = None  # Store passkey for display in UI
 
-        # UI Log buffer - store last 100 log messages
-        self._ui_logs = deque(maxlen=100)
+        # UI Log buffer - store last N log messages
+        self._ui_logs = deque(maxlen=self.UI_LOG_MAXLEN)
         self._ui_log_lock = threading.Lock()
         self.ui_position = self.options.get(
             "position", None
@@ -722,15 +735,13 @@ class BTTetherHelper(Plugin):
             "auto_reconnect", True
         )  # Enable automatic reconnection when connection drops
         self.reconnect_interval = self.options.get(
-            "reconnect_interval", 60
+            "reconnect_interval", self.DEFAULT_RECONNECT_INTERVAL
         )  # Check connection every N seconds (increased for RPi Zero W2)
 
         # Cache for status to avoid excessive bluetoothctl polling
         self._status_cache = None
         self._status_cache_time = 0
-        self._status_cache_ttl = (
-            5  # Cache status for 5s to reduce polling while keeping display responsive
-        )
+        self._status_cache_ttl = self.STATUS_CACHE_TTL
 
         # Lock to prevent multiple bluetoothctl commands from running simultaneously
         self._bluetoothctl_lock = threading.Lock()
@@ -745,7 +756,11 @@ class BTTetherHelper(Plugin):
         self._monitor_stop = threading.Event()
         self._last_known_connected = False  # Track if we were previously connected
         self._reconnect_failure_count = 0  # Track consecutive reconnect failures
-        self._max_reconnect_failures = 3  # Stop auto-reconnect after this many failures
+        self._max_reconnect_failures = self.MAX_RECONNECT_FAILURES
+        self._reconnect_failure_cooldown = self.options.get(
+            "reconnect_failure_cooldown", self.DEFAULT_RECONNECT_FAILURE_COOLDOWN
+        )  # Wait N seconds before resetting failure counter
+        self._first_failure_time = None  # Track when failures started
         self._user_requested_disconnect = False  # Track if user manually disconnected
 
         # Device name update configuration
@@ -774,8 +789,8 @@ class BTTetherHelper(Plugin):
 
     def _fallback_initialization(self):
         """Fallback initialization if on_ready() is not called within timeout"""
-        # Wait 15 seconds for on_ready() to be called
-        if not self._initialization_done.wait(timeout=15):
+        # Wait for on_ready() to be called
+        if not self._initialization_done.wait(timeout=self.FALLBACK_INIT_TIMEOUT):
             self._log(
                 "WARNING", "on_ready() was not called, using fallback initialization"
             )
@@ -1229,31 +1244,47 @@ default-agent
                     if success:
                         # Reset failure counter on successful connection
                         self._reconnect_failure_count = 0
+                        self._first_failure_time = None
                     else:
                         # Increment failure counter
                         self._reconnect_failure_count += 1
+                        # Track when failures started
+                        if self._first_failure_time is None:
+                            self._first_failure_time = time.time()
                         if (
                             self._reconnect_failure_count
                             >= self._max_reconnect_failures
                         ):
                             self._log(
                                 "WARNING",
-                                f"⚠️  Auto-reconnect stopped after {self._max_reconnect_failures} failed attempts",
+                                f"⚠️  Auto-reconnect paused after {self._max_reconnect_failures} failed attempts",
                             )
                             self._log(
                                 "INFO",
-                                "📱 Please check your phone and use the web UI to reconnect manually",
+                                f"📱 Will retry after {self._reconnect_failure_cooldown}s cooldown, or reconnect manually via web UI",
                             )
                             with self.lock:
                                 self.status = "DISCONNECTED"
-                                self.message = "Auto-reconnect disabled - manual reconnect required"
+                                self.message = f"Auto-reconnect paused - retrying in {self._reconnect_failure_cooldown}s"
                 elif self._reconnect_failure_count >= self._max_reconnect_failures:
-                    # Already exceeded max failures, don't log every time
-                    pass
+                    # Already exceeded max failures - check if cooldown period has elapsed
+                    if self._first_failure_time:
+                        time_since_first_failure = (
+                            time.time() - self._first_failure_time
+                        )
+                        if time_since_first_failure >= self._reconnect_failure_cooldown:
+                            # Cooldown period elapsed, reset counter and try again
+                            self._log(
+                                "INFO",
+                                f"Cooldown period elapsed ({self._reconnect_failure_cooldown}s), resetting failure counter and retrying...",
+                            )
+                            self._reconnect_failure_count = 0
+                            self._first_failure_time = None
                 elif not status["paired"] or not status["trusted"]:
                     # Device not paired/trusted (or blocked), don't attempt auto-reconnect
                     # Reset failure counter since this is intentional
                     self._reconnect_failure_count = 0
+                    self._first_failure_time = None
                     logging.debug(
                         f"[bt-tether-helper] Device not ready for auto-reconnect (paired={status['paired']}, trusted={status['trusted']})"
                     )
@@ -1303,7 +1334,7 @@ default-agent
                 self._log("INFO", f"✓ Reconnection successful")
 
                 # Wait for PAN interface
-                time.sleep(2)
+                time.sleep(self.PAN_INTERFACE_WAIT)
 
                 # Check if PAN interface is up
                 if self._pan_active():
@@ -1315,7 +1346,7 @@ default-agent
                         self._log("INFO", f"✓ Network setup successful")
 
                     # Verify internet connectivity
-                    time.sleep(2)
+                    time.sleep(self.INTERNET_VERIFY_WAIT)
                     if self._check_internet_connectivity():
                         self._log("INFO", f"✓ Internet connectivity verified!")
                         self._connectivity_verified.set()  # Signal BLE thread
@@ -1386,10 +1417,10 @@ default-agent
                 # Seek to end of file
                 f.seek(0, 2)
 
-                # Monitor for up to 90 seconds
+                # Monitor for configured timeout
                 start_time = time.time()
                 last_prompt = None
-                while time.time() - start_time < 90:
+                while time.time() - start_time < self.AGENT_LOG_MONITOR_TIMEOUT:
                     # Exit early if passkey found
                     if passkey_found_event.is_set():
                         logging.info(
@@ -1467,7 +1498,10 @@ default-agent
                         # No new data, sleep briefly
                         time.sleep(self.DBUS_OPERATION_RETRY_DELAY)
 
-            self._log("INFO", "Agent log monitoring timeout (90s)")
+            self._log(
+                "INFO",
+                f"Agent log monitoring timeout ({self.AGENT_LOG_MONITOR_TIMEOUT}s)",
+            )
         except Exception as e:
             self._log("ERROR", f"Error monitoring agent log: {e}")
 
