@@ -901,9 +901,6 @@ class BTTetherHelper(Plugin):
 
             self._log("INFO", "Bluetooth services initialized")
             self._initializing = False  # Mark initialization as complete
-            # Start monitoring thread for auto-reconnect
-            if self.auto_reconnect and self.phone_mac:
-                self._start_monitor_thread()
         except Exception as e:
             self._log("ERROR", f"Failed to initialize Bluetooth services: {e}")
             self._initializing = False  # Mark initialization as complete even on error
@@ -3621,7 +3618,6 @@ default-agent
 
             # Create device name - with or without IP based on config
             adv_data = f"{name} | {ip}" if ip else name
-            self._log("INFO", f"Updating device name to: {adv_data}")
 
             # Use D-Bus to set the adapter alias (device name)
             bus = dbus.SystemBus()
