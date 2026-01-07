@@ -64,29 +64,32 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <title>Bluetooth Tether</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background: #f5f5f5; }
-      .card { background: white; padding: 20px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-      h2 { margin: 0 0 20px 0; color: #333; }
-      input { padding: 10px; font-size: 14px; border: 1px solid #ddd; border-radius: 4px; text-transform: uppercase; }
-      button { padding: 10px 20px; background: #0066cc; color: white; border: none; cursor: pointer; font-size: 14px; border-radius: 4px; margin-right: 8px; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; }
-      button:hover { background: #0052a3; }
-      button.danger { background: #dc3545; }
-      button.danger:hover { background: #c82333; }
-      button.success { background: #28a745; }
-      button.success:hover { background: #218838; }
-      button:disabled { background: #ccc; cursor: not-allowed; }
-      .status-item { padding: 8px; margin: 4px 0; border-radius: 4px; background: #f8f9fa; }
-      .status-good { background: #d4edda; color: #155724; }
-      .status-bad { background: #f8d7da; color: #721c24; }
-      .device-item { padding: 12px; margin: 8px 0; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
-      .device-item:hover { background: #f0f8ff; border-color: #0066cc; }
-      .message-box { padding: 12px; border-radius: 4px; margin: 12px 0; }
-      .message-info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
-      .message-success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
-      .message-warning { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; }
-      .message-error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-      .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #f3f3f3; 
-                 border-top: 2px solid #0066cc; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
+      body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background: #0d1117; color: #d4d4d4; }
+      .card { background: #161b22; padding: 20px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.3); border: 1px solid #30363d; }
+      h2 { margin: 0 0 20px 0; color: #58a6ff; }
+      h3 { color: #d4d4d4; }
+      h4 { color: #8b949e; }
+      input { padding: 10px; font-size: 14px; border: 1px solid #30363d; border-radius: 4px; text-transform: uppercase; background: #0d1117; color: #d4d4d4; }
+      input:focus { outline: none; border-color: #58a6ff; background: #161b22; }
+      button { padding: 10px 20px; background: transparent; color: #3fb950; border: 1px solid #3fb950; cursor: pointer; font-size: 14px; border-radius: 4px; margin-right: 8px; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; }
+      button:hover { background: rgba(63, 185, 80, 0.1); border-color: #3fb950; }
+      button.danger { color: #f85149; border-color: #f85149; background: transparent; }
+      button.danger:hover { background: rgba(248, 81, 73, 0.1); border-color: #f85149; }
+      button.success { color: #3fb950; border-color: #3fb950; background: transparent; }
+      button.success:hover { background: rgba(63, 185, 80, 0.1); border-color: #3fb950; }
+      button:disabled { background: transparent; color: #8b949e; cursor: not-allowed; border-color: #30363d; }
+      .status-item { padding: 8px; margin: 4px 0; border-radius: 4px; background: #161b22; border: 1px solid #30363d; color: #d4d4d4; }
+      .status-good { background: rgba(46, 160, 67, 0.15); color: #3fb950; border-color: #3fb950; }
+      .status-bad { background: rgba(248, 81, 73, 0.15); color: #f85149; border-color: #f85149; }
+      .device-item { padding: 12px; margin: 8px 0; border: 1px solid #30363d; border-radius: 4px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; background: #0d1117; color: #d4d4d4; }
+      .device-item:hover { background: #161b22; border-color: #58a6ff; }
+      .message-box { padding: 12px; border-radius: 4px; margin: 12px 0; border-left: 4px solid; }
+      .message-info { background: rgba(88, 166, 255, 0.1); color: #79c0ff; border-color: #79c0ff; }
+      .message-success { background: rgba(63, 185, 80, 0.1); color: #3fb950; border-color: #3fb950; }
+      .message-warning { background: rgba(214, 159, 0, 0.1); color: #d29922; border-color: #d29922; }
+      .message-error { background: rgba(248, 81, 73, 0.1); color: #f85149; border-color: #f85149; }
+      .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #30363d; 
+                 border-top: 2px solid #58a6ff; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
       @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
       .mac-editor { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .mac-editor input { flex: 1; min-width: 200px; }
@@ -104,13 +107,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <!-- Phone Connection & Status -->
     <div class="card" id="phoneConnectionCard" style="display: none;">
       <h3 style="margin: 0 0 12px 0;">📱 Phone Connection</h3>
-      <div style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
+      <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
         <div style="color: #888; margin-bottom: 4px;">Configured MAC address:</div>
         <div style="color: #4ec9b0; font-size: 14px;">{{ mac if mac else 'Not configured' }}</div>
       </div>
       
       <!-- Status in output style -->
-      <div style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
+      <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
         <div style="color: #888; margin-bottom: 8px;">Connection Status:</div>
         <div id="statusActiveConnection" style="display: none; margin: 4px 0; padding: 8px; background: rgba(78, 201, 176, 0.1); border-left: 3px solid #4ec9b0; margin-bottom: 8px;"></div>
         <div id="statusPaired" style="margin: 4px 0;">📱 Paired: <span>Checking...</span></div>
@@ -125,9 +128,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       
       <!-- Output Section (shown above connect button) -->
       <div style="margin-bottom: 12px;">
-        <h4 style="margin: 0 0 8px 0; color: #666; font-size: 14px;">📋 Output</h4>
+        <h4 style="margin: 0 0 8px 0; color: #8b949e; font-size: 14px;">📋 Output</h4>
         <div id="logViewer">
-          <div style="background: #1e1e1e; color: #d4d4d4; padding: 12px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; line-height: 1.5;" id="logContent">
+          <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; line-height: 1.5;" id="logContent">
             <div style="color: #888;">Fetching logs...</div>
           </div>
         </div>
@@ -142,16 +145,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       
       <!-- Disconnect Section -->
       <div id="disconnectSection" style="display: none;">
-        <label style="display: flex; align-items: center; gap: 12px; padding: 12px; background: #fff3cd; border-radius: 4px; cursor: pointer; margin-bottom: 8px;">
+        <label style="display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(214, 159, 0, 0.1); border: 1px solid #d29922; border-radius: 4px; cursor: pointer; margin-bottom: 8px;">
           <input type="checkbox" id="unpairCheckbox" style="width: 20px; height: 20px; margin: 0; cursor: pointer;" />
-          <span style="color: #856404; font-size: 14px; font-weight: 500;">Also unpair device (requires passkey on next connection)</span>
+          <span style="color: #d29922; font-size: 14px; font-weight: 500;">Also unpair device (requires passkey on next connection)</span>
         </label>
         <button class="danger" onclick="disconnectDevice()" id="disconnectBtn" style="width: 100%; margin: 0 0 8px 0;">
           🔌 Disconnect
         </button>
       </div>
       
-      <small style="color: #666; display: block; margin-bottom: 12px;">Click Connect for first-time pairing. Pairing dialog will appear on your phone. Disconnect blocks device to prevent auto-reconnect.</small>
+      <small style="color: #8b949e; display: block; margin-bottom: 12px;">Click Connect for first-time pairing. Pairing dialog will appear on your phone. Disconnect blocks device to prevent auto-reconnect.</small>
     </div>
     
     <!-- Test Internet Connectivity -->
@@ -170,14 +173,14 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <!-- Scan for Devices -->
     <div class="card" id="scanCard">
       <h3 style="margin: 0 0 12px 0;">🔍 Scan for Devices</h3>
-      <div id="setupInstructions" style="background: #e7f3ff; padding: 12px; border-radius: 4px; margin-bottom: 12px; border-left: 4px solid #0066cc;">
-        <p style="margin: 0 0 8px 0; font-weight: bold;">First-time setup:</p>
-        <ol style="margin: 0; padding-left: 20px; line-height: 1.6;">
+      <div id="setupInstructions" style="background: rgba(88, 166, 255, 0.1); padding: 12px; border-radius: 4px; margin-bottom: 12px; border-left: 4px solid #58a6ff; color: #d4d4d4;">
+        <p style="margin: 0 0 8px 0; font-weight: bold; color: #79c0ff;">First-time setup:</p>
+        <ol style="margin: 0; padding-left: 20px; line-height: 1.6; color: #d4d4d4;">
           <li>Make sure your phone's Bluetooth is ON</li>
           <li>Click "Scan" below to discover devices</li>
           <li>Find your phone in the list and click 📋 Copy MAC</li>
-          <li>Open <code style="background: white; padding: 2px 6px; border-radius: 3px;">/etc/pwnagotchi/config.toml</code></li>
-          <li>Add: <code style="background: white; padding: 2px 6px; border-radius: 3px;">main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"</code></li>
+          <li>Open <code style="background: #0d1117; padding: 2px 6px; border-radius: 3px; border: 1px solid #30363d; color: #79c0ff;">/etc/pwnagotchi/config.toml</code></li>
+          <li>Add: <code style="background: #0d1117; padding: 2px 6px; border-radius: 3px; border: 1px solid #30363d; color: #79c0ff;">main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"</code></li>
           <li>Restart Pwnagotchi to apply changes</li>
         </ol>
       </div>
@@ -188,7 +191,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <!-- Discovered Devices List -->
       <div id="scanResults" style="margin-top: 16px; display: none;">
         <h4 style="margin: 0 0 8px 0;">Discovered Devices:</h4>
-        <div id="scanStatus" style="color: #666; margin: 8px 0;">Scanning...</div>
+        <div id="scanStatus" style="color: #8b949e; margin: 8px 0;">Scanning...</div>
         <div id="deviceList"></div>
       </div>
     </div>
@@ -203,7 +206,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       // Update card visibility and status on page load
       updateCardVisibility();
       if (macInput.value && /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(macInput.value)) {
-        checkConnectionStatus();
+        // Show initializing state first
+        setInitializingStatus();
+        // Then check actual connection status
+        setTimeout(checkConnectionStatus, 1000);
       }
       
       // Start log polling immediately
@@ -219,6 +225,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
         document.getElementById('phoneConnectionCard').style.display = hasMac ? 'block' : 'none';
         document.getElementById('testInternetCard').style.display = hasMac ? 'block' : 'none';
+      }
+
+      function setInitializingStatus() {
+        document.getElementById("statusPaired").innerHTML = 
+          `📱 Paired: <span style="color: #8b949e;">🔄 Initializing...</span>`;
+        
+        document.getElementById("statusTrusted").innerHTML = 
+          `🔐 Trusted: <span style="color: #8b949e;">🔄 Initializing...</span>`;
+        
+        document.getElementById("statusConnected").innerHTML = 
+          `🔵 Connected: <span style="color: #8b949e;">🔄 Initializing...</span>`;
+        
+        document.getElementById("statusInternet").innerHTML = 
+          `🌐 Internet: <span style="color: #8b949e;">🔄 Initializing...</span>`;
+        
+        document.getElementById('statusIP').style.display = 'none';
+        document.getElementById('statusActiveConnection').style.display = 'none';
+        
+        const connectBtn = document.getElementById('quickConnectBtn');
+        connectBtn.disabled = true;
+        connectBtn.innerHTML = '<span class="spinner"></span> Initializing...';
       }
 
       async function checkConnectionStatus() {
@@ -669,7 +696,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "0.9.9-beta"
+    __version__ = "1.0.0"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -750,6 +777,8 @@ class BTTetherHelper(Plugin):
         self._connection_in_progress = False
         # Flag to indicate when disconnecting is in progress
         self._disconnecting = False
+        # Flag to indicate when plugin is initializing
+        self._initializing = True
 
         # Monitoring thread for automatic reconnection
         self._monitor_thread = None
@@ -806,6 +835,7 @@ class BTTetherHelper(Plugin):
 
     def _initialize_bluetooth_services(self):
         """Initialize Bluetooth services - called by either on_ready() or fallback"""
+        self._initializing = True  # Mark as initializing
         try:
             # Kill any lingering bluetoothctl processes to prevent deadlocks
             try:
@@ -870,8 +900,13 @@ class BTTetherHelper(Plugin):
                 self._log("INFO", "Device name IP advertising disabled in config")
 
             self._log("INFO", "Bluetooth services initialized")
+            self._initializing = False  # Mark initialization as complete
+            # Start monitoring thread for auto-reconnect
+            if self.auto_reconnect and self.phone_mac:
+                self._start_monitor_thread()
         except Exception as e:
             self._log("ERROR", f"Failed to initialize Bluetooth services: {e}")
+            self._initializing = False  # Mark initialization as complete even on error
 
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
 
@@ -990,6 +1025,17 @@ class BTTetherHelper(Plugin):
             return
 
         try:
+            # Show initializing indicator first
+            with self.lock:
+                initializing = self._initializing
+                connection_in_progress = self._connection_in_progress
+
+            if initializing:
+                ui.set("bt-status", "I")  # I = Initializing
+                if self.show_detailed_status:
+                    ui.set("bt-detail", "BT:Initializing...")
+                return
+
             # Show connecting indicator when connection is in progress
             # > = Connecting/Pairing in progress
             with self.lock:
@@ -1017,7 +1063,7 @@ class BTTetherHelper(Plugin):
             status = self._get_full_connection_status(self.phone_mac)
 
             # Determine display value based on status
-            # C = Connected (internet), T = Connected+Trusted (no internet), N = Connected+Untrusted, P = Paired only, D = Disconnected
+            # I = Initializing, > = Connecting/Pairing in progress, C = Connected (internet), T = Connected+Trusted (no internet), N = Connected+Untrusted, P = Paired only, D = Disconnected
             if status.get("pan_active", False):
                 display = "C"  # Connected with internet
             elif status.get("connected", False) and status.get("trusted", False):

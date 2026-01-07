@@ -172,6 +172,7 @@ main.plugins.bt-tether-helper.advertise_ip = false  # Show IP in Bluetooth devic
 **Compact Status (`show_on_screen`):**
 
 - Shows single-letter status in top-right corner
+- **I** = Initializing (plugin startup)
 - **C** = Connected with internet (PAN active)
 - **T** = Connected and trusted (no internet yet)
 - **N** = Connected but not trusted
@@ -183,6 +184,7 @@ main.plugins.bt-tether-helper.advertise_ip = false  # Show IP in Bluetooth devic
 **Detailed Status (`show_detailed_status`):**
 
 - Shows full status at configurable position (default: [0, 82])
+- **BT:Initializing...** = Plugin initializing
 - **BT:10.199.236.17** = Connected with IP address
 - **BT:Trusted** = Connected and trusted but no IP yet
 - **BT:Connected** = Connected but not trusted
