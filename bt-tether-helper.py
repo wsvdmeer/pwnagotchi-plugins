@@ -21,16 +21,8 @@ Setup:
 
 Configuration options:
 - main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Phone MAC address
-- main.plugins.bt-tether-helper.advertise_ip = false  # Show IP in device name (default: false, enable for headless)
 - main.plugins.bt-tether-helper.auto_reconnect = true  # Auto reconnect on disconnect
 - main.plugins.bt-tether-helper.show_on_screen = true  # Show status on display
-
-Device Name with IP (for headless use):
-Set advertise_ip = true to automatically update the Bluetooth device name with your IP address.
-Format: "{pwnagotchi_name} | {ip_address}"
-View this in your phone's Bluetooth settings - perfect for headless setups where you can't see the screen.
-Updates occur once after internet connectivity is verified, and again on each reconnection.
-When disabled (default), only the pwnagotchi name is shown.
 """
 
 import subprocess
@@ -354,9 +346,18 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           // Show/hide connect/disconnect buttons based on connection status
           const connectBtn = document.getElementById('quickConnectBtn');
           const disconnectSection = document.getElementById('disconnectSection');
+          const unpairCheckbox = document.getElementById('unpairCheckbox');
           
           // Set button state based on current status
-          if (statusData.status === 'PAIRING' || statusData.status === 'CONNECTING' || statusData.status === 'RECONNECTING') {
+          if (statusData.disconnecting) {
+            // Show disconnecting state
+            connectBtn.disabled = true;
+            connectBtn.innerHTML = '<span class="spinner"></span> Disconnecting...';
+          } else if (statusData.untrusting) {
+            // Show untrusting state  
+            connectBtn.disabled = true;
+            connectBtn.innerHTML = '<span class="spinner"></span> Untrusting...';
+          } else if (statusData.status === 'PAIRING' || statusData.status === 'CONNECTING' || statusData.status === 'RECONNECTING') {
             // Show spinner during connection operations
             connectBtn.disabled = true;
             connectBtn.innerHTML = '<span class="spinner"></span> Connecting...';
@@ -364,6 +365,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             // Enable button when disconnected and not connecting
             connectBtn.disabled = false;
             connectBtn.innerHTML = '⚡ Connect to Phone';
+          }
+          
+          // Disable checkbox during disconnecting operations
+          if (unpairCheckbox) {
+            unpairCheckbox.disabled = statusData.disconnecting || statusData.untrusting;
           }
           
           // Show connect button only when paired/trusted but not connected
@@ -420,12 +426,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           if (data.success) {
             showFeedback("Connection started! Check your phone for the pairing dialog.", "success");
             startStatusPolling();
+            // Don't reset button - let status polling handle button states
           } else {
             showFeedback("Connection failed: " + data.message, "error");
+            // Only reset button on failure
+            quickConnectBtn.disabled = false;
+            quickConnectBtn.innerHTML = '⚡ Connect to Phone';
           }
         } catch (error) {
           showFeedback("Connection failed: " + error.message, "error");
-        } finally {
+          // Only reset button on error
           quickConnectBtn.disabled = false;
           quickConnectBtn.innerHTML = '⚡ Connect to Phone';
         }
@@ -696,7 +706,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.0.0"
+    __version__ = "1.0.1"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -721,8 +731,7 @@ class BTTetherHelper(Plugin):
     MAX_RECONNECT_FAILURES = 5  # Max consecutive failures before cooldown
     DEFAULT_RECONNECT_FAILURE_COOLDOWN = 300  # Default cooldown in seconds (5 minutes)
 
-    # Cache and buffer constants
-    STATUS_CACHE_TTL = 5  # Seconds to cache status to reduce bluetoothctl polling
+    # UI and buffer constants
     UI_LOG_MAXLEN = 100  # Maximum number of log messages in UI buffer
 
     def on_loaded(self):
@@ -765,11 +774,6 @@ class BTTetherHelper(Plugin):
             "reconnect_interval", self.DEFAULT_RECONNECT_INTERVAL
         )  # Check connection every N seconds (increased for RPi Zero W2)
 
-        # Cache for status to avoid excessive bluetoothctl polling
-        self._status_cache = None
-        self._status_cache_time = 0
-        self._status_cache_ttl = self.STATUS_CACHE_TTL
-
         # Lock to prevent multiple bluetoothctl commands from running simultaneously
         self._bluetoothctl_lock = threading.Lock()
 
@@ -777,6 +781,8 @@ class BTTetherHelper(Plugin):
         self._connection_in_progress = False
         # Flag to indicate when disconnecting is in progress
         self._disconnecting = False
+        # Flag to indicate when untrusting is in progress
+        self._untrusting = False
         # Flag to indicate when plugin is initializing
         self._initializing = True
 
@@ -792,15 +798,14 @@ class BTTetherHelper(Plugin):
         self._first_failure_time = None  # Track when failures started
         self._user_requested_disconnect = False  # Track if user manually disconnected
 
+        # Screen update optimization
+        self._screen_needs_refresh = False  # Flag to force immediate screen update
+        self._ui_update_timer = None  # Timer for rapid UI updates during transitions
+        self._ui_update_active = False  # Flag to prevent multiple timers
+
         # Device name update configuration
-        self.advertise_ip = self.options.get(
-            "advertise_ip", False
-        )  # Show IP in device name (disabled by default, enable for headless use)
         self._name_update_thread = None
         self._name_update_stop = threading.Event()
-        self._connectivity_verified = (
-            threading.Event()
-        )  # Signal when internet is verified
 
         # Track if initialization has been done (to prevent double-init from fallback)
         self._initialization_done = threading.Event()
@@ -875,29 +880,8 @@ class BTTetherHelper(Plugin):
             if self.auto_reconnect and self.phone_mac:
                 self._start_monitoring_thread()
 
-            # Set initial device name immediately (without IP)
-            if DBUS_AVAILABLE:
-                try:
-                    pwn_name = self._get_pwnagotchi_name()
-                    self._log("INFO", f"Setting initial device name: {pwn_name}")
-                    self._update_device_name(pwn_name, None)
-                except Exception as e:
-                    self._log("WARNING", f"Failed to set initial device name: {e}")
-
-            # Start device name update thread
-            if self.advertise_ip:
-                if not DBUS_AVAILABLE:
-                    self._log(
-                        "ERROR", "Device name updates disabled - dbus not available"
-                    )
-                    self._log(
-                        "ERROR", "Install with: sudo apt-get install -y python3-dbus"
-                    )
-                else:
-                    self._log("INFO", "Starting device name update thread...")
-                    self._start_ble_advertising()
-            else:
-                self._log("INFO", "Device name IP advertising disabled in config")
+            # Set Bluetooth device name
+            self._set_device_name()
 
             self._log("INFO", "Bluetooth services initialized")
             self._initializing = False  # Mark initialization as complete
@@ -1022,47 +1006,49 @@ class BTTetherHelper(Plugin):
             return
 
         try:
-            # Show initializing indicator first
+            # Get current state flags atomically
             with self.lock:
                 initializing = self._initializing
                 connection_in_progress = self._connection_in_progress
+                disconnecting = self._disconnecting
+                untrusting = self._untrusting
 
+            # Handle state transitions first (highest priority)
+            # These flags are set during operations and should display immediately
             if initializing:
                 ui.set("bt-status", "I")  # I = Initializing
                 if self.show_detailed_status:
-                    ui.set("bt-detail", "BT:Initializing...")
+                    ui.set("bt-detail", "BT:Initializing")
                 return
 
-            # Show connecting indicator when connection is in progress
-            # > = Connecting/Pairing in progress
-            with self.lock:
-                connection_in_progress = self._connection_in_progress
+            if disconnecting:
+                ui.set("bt-status", "D")  # D = Disconnecting
+                if self.show_detailed_status:
+                    ui.set("bt-detail", "BT:Disconnecting")
+                return
+
+            if untrusting:
+                ui.set("bt-status", "U")  # U = Untrusting
+                if self.show_detailed_status:
+                    ui.set("bt-detail", "BT:Untrusting")
+                return
 
             if connection_in_progress:
-                ui.set("bt-status", ">")
-                # Still update detailed status even during connection/disconnection
+                ui.set("bt-status", ">")  # > = Connecting
                 if self.show_detailed_status:
-                    try:
-                        # Get current status for detailed display
-                        status = self._get_full_connection_status(self.phone_mac)
-                        detailed = self._format_detailed_status(status)
-                        ui.set("bt-detail", detailed)
-                    except Exception as detail_error:
-                        logging.debug(
-                            f"[bt-tether-helper] Detailed status error: {detail_error}"
-                        )
+                    ui.set("bt-detail", "BT:Connecting")
                 return
 
-            # Invalidate cache to force fresh check on screen updates
-            self._invalidate_status_cache()
-
-            # Get current connection status
-            status = self._get_full_connection_status(self.phone_mac)
+            # Get actual status for stable states
+            status = self._get_current_status(self.phone_mac)
 
             # Determine display value based on status
-            # I = Initializing, > = Connecting/Pairing in progress, C = Connected (internet), T = Connected+Trusted (no internet), N = Connected+Untrusted, P = Paired only, D = Disconnected
+            # I = Initializing, > = Connecting/Pairing in progress, U = Untrusting, X = Disconnecting/Disconnected
+            # C = Connected (with internet), T = Connected+Trusted (no internet), N = Connected+Untrusted, P = Paired only
             if status.get("pan_active", False):
-                display = "C"  # Connected with internet
+                display = (
+                    "C"  # Connected with internet - will show IP in detailed status
+                )
             elif status.get("connected", False) and status.get("trusted", False):
                 display = "T"  # Connected and trusted but no internet yet
             elif status.get("connected", False):
@@ -1070,11 +1056,12 @@ class BTTetherHelper(Plugin):
             elif status.get("paired", False):
                 display = "P"  # Paired but not connected
             else:
-                display = "D"  # Disconnected
+                display = "X"  # Disconnected
 
+            # Always update the UI element
             ui.set("bt-status", display)
 
-            # Update detailed status line
+            # Update detailed status line if enabled
             if self.show_detailed_status:
                 try:
                     detailed = self._format_detailed_status(status)
@@ -1083,6 +1070,8 @@ class BTTetherHelper(Plugin):
                     logging.debug(
                         f"[bt-tether-helper] Detailed status error: {detail_error}"
                     )
+                    # Fallback to basic status on error
+                    ui.set("bt-detail", f"BT:{display}")
 
         except Exception as e:
             # Log error but don't crash
@@ -1101,24 +1090,30 @@ class BTTetherHelper(Plugin):
         with self.lock:
             disconnecting = self._disconnecting
             connection_in_progress = self._connection_in_progress
+            untrusting = self._untrusting
 
         # Get connection state
         connected = status.get("connected", False)
         paired = status.get("paired", False)
         trusted = status.get("trusted", False)
         pan_active = status.get("pan_active", False)
-        ip_address = status.get("ip_address")
+        ip_address = status.get("ip_address", None)
 
         # Build status string
         if disconnecting:
             return "BT:Disconnecting..."
+        elif untrusting:
+            return "BT:Untrusting..."
         elif connection_in_progress:
             return "BT:Connecting..."
-        elif pan_active and ip_address:
-            # Connected with IP: just show the IP
-            return f"BT:{ip_address}"
+        elif pan_active:
+            # Connected via PAN - show IP if available, otherwise just "Connected"
+            if ip_address:
+                return f"BT:{ip_address}"
+            else:
+                return "BT:Connected"
         elif connected and trusted:
-            # Connected and trusted but no IP yet
+            # Connected and trusted but no PAN yet
             return "BT:Trusted"
         elif connected:
             # Connected but not trusted
@@ -1250,16 +1245,18 @@ default-agent
                     with self.lock:
                         self.status = "RECONNECTING"
                         self.message = "Connection lost, reconnecting..."
+                        self._screen_needs_refresh = True
 
                     # Attempt to reconnect
                     self._reconnect_device()
 
-                # Invalidate cache when connection state changes
-                if status["connected"] != self._last_known_connected:
-                    self._invalidate_status_cache()
-
                 # Update last known state
                 self._last_known_connected = status["connected"]
+
+                # Force screen refresh if connection state changed
+                if self._last_known_connected != status["connected"]:
+                    with self.lock:
+                        self._screen_needs_refresh = True
 
                 # Only try to reconnect if device is BOTH paired AND trusted (and not blocked)
                 # Also check if we haven't exceeded max failures and user didn't manually disconnect
@@ -1281,6 +1278,7 @@ default-agent
                     with self.lock:
                         self.status = "CONNECTING"
                         self.message = "Reconnecting to device..."
+                        self._screen_needs_refresh = True
 
                     success = self._reconnect_device()
 
@@ -1309,6 +1307,7 @@ default-agent
                             with self.lock:
                                 self.status = "DISCONNECTED"
                                 self.message = f"Auto-reconnect paused - retrying in {self._reconnect_failure_cooldown}s"
+                                self._screen_needs_refresh = True
                 elif self._reconnect_failure_count >= self._max_reconnect_failures:
                     # Already exceeded max failures - check if cooldown period has elapsed
                     if self._first_failure_time:
@@ -1351,7 +1350,6 @@ default-agent
             # Set flag to prevent concurrent operations
             with self.lock:
                 self._connection_in_progress = True
-            self._invalidate_status_cache()
 
             self._log("INFO", f"Reconnecting to {mac}...")
 
@@ -1392,27 +1390,11 @@ default-agent
                     time.sleep(self.INTERNET_VERIFY_WAIT)
                     if self._check_internet_connectivity():
                         self._log("INFO", f"✓ Internet connectivity verified!")
-                        self._connectivity_verified.set()  # Signal BLE thread
-                        # Update device name with new IP if advertise_ip is enabled
-                        if self.advertise_ip and DBUS_AVAILABLE:
-                            try:
-                                pwn_name = self._get_pwnagotchi_name()
-                                current_ip = self._get_current_ip()
-                                if current_ip:
-                                    self._log(
-                                        "INFO",
-                                        f"Updating device name to: {pwn_name} | {current_ip}",
-                                    )
-                                    self._update_device_name(pwn_name, current_ip)
-                            except Exception as e:
-                                self._log(
-                                    "WARNING", f"Failed to update device name: {e}"
-                                )
-                        # Invalidate cache so screen gets fresh IP
-                        self._invalidate_status_cache()
+                        # Update status and force screen refresh
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"✓ Reconnected! Internet via {iface}"
+                            self._screen_needs_refresh = True
                         return True
                     else:
                         logging.warning(
@@ -1421,6 +1403,7 @@ default-agent
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"Reconnected via {iface} but no internet"
+                            self._screen_needs_refresh = True
                         return True
                 else:
                     logging.warning(
@@ -1429,6 +1412,7 @@ default-agent
                     with self.lock:
                         self.status = "CONNECTED"
                         self.message = "Reconnected but no PAN interface"
+                        self._screen_needs_refresh = True
                     return True
             else:
                 logging.warning(f"[bt-tether-helper] Reconnection failed")
@@ -1446,7 +1430,6 @@ default-agent
         finally:
             with self.lock:
                 self._connection_in_progress = False
-            self._invalidate_status_cache()
 
     def _monitor_agent_log_for_passkey(self, passkey_found_event):
         """Monitor agent log file for passkey display in real-time and auto-confirm"""
@@ -1501,7 +1484,6 @@ default-agent
                                         self.message = f"🔑 PASSKEY: {self.current_passkey}\n\nVerify this matches on your phone, then tap PAIR!"
 
                                     # Invalidate cache so web UI gets fresh status with passkey
-                                    self._invalidate_status_cache()
 
                                     # Auto-confirm passkey on Pwnagotchi side
                                     if (
@@ -1548,6 +1530,26 @@ default-agent
         except Exception as e:
             self._log("ERROR", f"Error monitoring agent log: {e}")
 
+    def _start_rapid_ui_updates(self):
+        """Mark that UI should show transition state - called when state changes"""
+        # Note: We can't force pwnagotchi to refresh the screen from a plugin.
+        # The on_ui_update() method is called by the framework at its own interval.
+        # We just ensure the state flags are set so on_ui_update() shows the right status.
+        pass
+
+    def _rapid_ui_update(self):
+        """No-op - kept for compatibility with existing code that calls it"""
+        # The pwnagotchi framework controls when on_ui_update() is called.
+        # We can't force screen updates from a plugin.
+        pass
+
+    def _stop_rapid_ui_updates(self):
+        """Stop rapid UI updates"""
+        self._ui_update_active = False
+        if self._ui_update_timer:
+            self._ui_update_timer.cancel()
+            self._ui_update_timer = None
+
     def on_webhook(self, path, request):
         try:
             # Normalize path by stripping leading slash
@@ -1580,14 +1582,37 @@ default-agent
                             "status": self.status,
                             "message": self.message,
                             "mac": self.phone_mac,
+                            "disconnecting": self._disconnecting,
+                            "untrusting": self._untrusting,
                         }
                     )
 
             if clean_path == "disconnect":
                 mac = request.args.get("mac", "").strip().upper()
                 if mac and self._validate_mac(mac):
-                    result = self._disconnect_device(mac)
-                    return jsonify(result)
+                    # Set flags immediately so UI shows disconnecting state
+                    with self.lock:
+                        self._user_requested_disconnect = True
+                        self._disconnecting = True
+
+                    # Run disconnect in background thread so UI can update
+                    def do_disconnect():
+                        try:
+                            self._disconnect_device(mac)
+                        except Exception as e:
+                            logging.error(
+                                f"[bt-tether-helper] Background disconnect error: {e}"
+                            )
+                            # Ensure flags are cleared even on error
+                            with self.lock:
+                                self._disconnecting = False
+                                self._connection_in_progress = False
+
+                    thread = threading.Thread(target=do_disconnect, daemon=True)
+                    thread.start()
+
+                    # Return immediately so pwnagotchi UI can refresh
+                    return jsonify({"success": True, "message": "Disconnect started"})
                 else:
                     return jsonify({"success": False, "message": "Invalid MAC"})
 
@@ -1648,27 +1673,14 @@ default-agent
     def _disconnect_device(self, mac):
         """Disconnect from a Bluetooth device and remove trust to prevent auto-reconnect"""
         try:
-            # FIRST: Set flag to stop auto-reconnect immediately
+            # Set flags to stop auto-reconnect and indicate disconnecting state
             with self.lock:
                 self._user_requested_disconnect = True
-
-            # Wait briefly for any ongoing reconnect to complete
-            with self.lock:
-                connection_in_progress = self._connection_in_progress
-
-            if connection_in_progress:
-                self._log("INFO", "Waiting for ongoing operation to complete...")
-                # Wait up to 5 seconds for current operation to finish
-                for _ in range(10):
-                    with self.lock:
-                        if not self._connection_in_progress:
-                            break
-                    time.sleep(0.5)
-
-            # Now set flag to prevent monitor from interfering with disconnect
-            with self.lock:
                 self._connection_in_progress = True
                 self._disconnecting = True  # Set disconnecting flag for UI
+
+            # Wait briefly for any ongoing reconnect to complete
+            time.sleep(0.5)
 
             self._log("INFO", f"Disconnecting from device {mac}...")
 
@@ -1713,9 +1725,16 @@ default-agent
 
             # Remove trust to prevent automatic reconnection
             self._log("INFO", "Removing trust to prevent auto-reconnect...")
+            with self.lock:
+                self._disconnecting = False  # Clear disconnecting, now untrusting
+                self._untrusting = True  # Show untrusting state
+
             trust_result = self._run_cmd(["bluetoothctl", "untrust", mac], capture=True)
             self._log("INFO", f"Untrust result: {trust_result}")
             time.sleep(self.DEVICE_OPERATION_DELAY)
+            with self.lock:
+                self._untrusting = False  # Clear untrusting state
+                self._screen_needs_refresh = True  # Force screen update after untrust
 
             # Block the device BEFORE removing it to prevent reconnection attempts
             self._log("INFO", "Blocking device to prevent reconnection...")
@@ -1743,22 +1762,6 @@ default-agent
                 # Clear passkey after disconnect
                 self.current_passkey = None
 
-            # Invalidate status cache again to ensure fresh status on next poll
-            self._invalidate_status_cache()
-
-            # Force immediate cache update with disconnected status
-            self._status_cache = {
-                "paired": False,
-                "trusted": False,
-                "connected": False,
-                "pan_active": False,
-                "interface": None,
-                "ip_address": None,
-                "passkey": None,
-                "default_route_interface": None,
-            }
-            self._status_cache_time = time.time()
-
             # Return success
             return {
                 "success": True,
@@ -1772,12 +1775,12 @@ default-agent
             with self.lock:
                 self._connection_in_progress = False
                 self._disconnecting = False
+                self._untrusting = False
 
     def _unpair_device(self, mac):
         """Unpair a Bluetooth device"""
         try:
             # Invalidate status cache before unpair
-            self._invalidate_status_cache()
 
             self._log("INFO", f"Unpairing device {mac}...")
             result = self._run_cmd(
@@ -1801,22 +1804,6 @@ default-agent
                     self._last_known_connected = False
                     # Clear passkey after unpair
                     self.current_passkey = None
-
-                # Invalidate status cache again after unpair
-                self._invalidate_status_cache()
-
-                # Force immediate cache update with disconnected status
-                self._status_cache = {
-                    "paired": False,
-                    "trusted": False,
-                    "connected": False,
-                    "pan_active": False,
-                    "interface": None,
-                    "ip_address": None,
-                    "passkey": None,
-                    "default_route_interface": None,
-                }
-                self._status_cache_time = time.time()
 
                 return {
                     "success": True,
@@ -1855,146 +1842,105 @@ default-agent
             self._log("ERROR", f"Pair status check error: {e}")
             return {"paired": False, "connected": False}
 
-    def _invalidate_status_cache(self):
-        """Invalidate the status cache to force fresh status check"""
-        self._status_cache = None
-        self._status_cache_time = 0
-
-    def _get_full_connection_status(self, mac):
-        """Get complete connection status including trusted and PAN interface (with caching)"""
+    def _get_current_status(self, mac):
+        """Get current connection status - no cache, direct check"""
         try:
-            # If connection/pairing is in progress, return cached status to avoid blocking
-            with self.lock:
-                connection_in_progress = self._connection_in_progress
-
-            if connection_in_progress:
-                if self._status_cache:
-                    return self._status_cache
-                # Return default "connecting" status if no cache yet
-                return {
-                    "paired": False,
-                    "trusted": False,
-                    "connected": False,
-                    "pan_active": False,
-                    "interface": None,
-                }
-
-            # Use cached status if still fresh (< 30 seconds old)
-            current_time = time.time()
-            if (
-                self._status_cache
-                and (current_time - self._status_cache_time) < self._status_cache_ttl
-            ):
-                return self._status_cache
-
-            # First check if device is blocked (bluetoothctl info hangs on blocked devices)
-            # Use shorter timeout (5s) for this check since it sometimes hangs
-            devices_output = self._run_cmd(
-                ["bluetoothctl", "devices", "Blocked"], capture=True, timeout=5
-            )
-
-            # If blocked check times out or returns timeout, skip it and try info directly
-            if devices_output and devices_output != "Timeout" and mac in devices_output:
-                logging.debug(
-                    f"[bt-tether-helper] Device {mac} is blocked, returning disconnected status"
+            # Quick check: look for active bnep interface first (fastest indicator)
+            try:
+                # Check for bnep interface directly
+                pan_result = subprocess.run(
+                    ["ip", "link", "show"], capture_output=True, text=True, timeout=2
                 )
-                status = {
-                    "paired": False,
-                    "trusted": False,
-                    "connected": False,
-                    "pan_active": False,
-                    "interface": None,
-                    "ip_address": None,
-                    "default_route_interface": None,
-                }
-                # Cache the result
-                self._status_cache = status
-                self._status_cache_time = current_time
-                return status
+                if pan_result.returncode == 0 and "bnep" in pan_result.stdout:
+                    # Check if bnep interface has an IP address
+                    try:
+                        ip_result = subprocess.run(
+                            ["ip", "addr", "show", "bnep0"],
+                            capture_output=True,
+                            text=True,
+                            timeout=2,
+                        )
+                        if ip_result.returncode == 0 and "inet " in ip_result.stdout:
+                            # Extract IP address from the output - simplified parsing
+                            ip_address = None
+                            for line in ip_result.stdout.split("\n"):
+                                if "inet " in line and not "127.0.0.1" in line:
+                                    # Find the IP address in format "inet x.x.x.x/xx"
+                                    parts = line.strip().split()
+                                    for part in parts:
+                                        if part.startswith("inet"):
+                                            continue
+                                        if "/" in part and "." in part:
+                                            ip_address = part.split("/")[0]
+                                            break
+                                    if ip_address:
+                                        break
 
-            # Try to get device info (with 10s timeout)
-            info = self._run_cmd(
-                ["bluetoothctl", "info", mac], capture=True, timeout=10
-            )
+                            # PAN interface exists and has IP, we're connected with internet
+                            return {
+                                "paired": True,
+                                "trusted": True,
+                                "connected": True,
+                                "pan_active": True,
+                                "interface": "bnep0",
+                                "ip_address": ip_address,
+                            }
+                    except:
+                        pass
+            except:
+                pass
 
-            # If info command timed out, return disconnected status
-            if info == "Timeout":
-                logging.warning(
-                    f"[bt-tether-helper] Device info query timed out, returning disconnected status"
+            # Quick bluetoothctl check with minimal timeout
+            try:
+                result = subprocess.run(
+                    ["bluetoothctl", "info", mac],
+                    capture_output=True,
+                    text=True,
+                    timeout=3,
                 )
-                status = {
-                    "paired": False,
-                    "trusted": False,
-                    "connected": False,
-                    "pan_active": False,
-                    "interface": None,
-                    "ip_address": None,
-                    "default_route_interface": None,
-                }
-                # Cache the result
-                self._status_cache = status
-                self._status_cache_time = current_time
-                return status
 
-            if not info or "Device" not in info:
-                status = {
-                    "paired": False,
-                    "trusted": False,
-                    "connected": False,
-                    "pan_active": False,
-                    "interface": None,
-                    "ip_address": None,
-                    "default_route_interface": None,
-                }
-                # Cache the result
-                self._status_cache = status
-                self._status_cache_time = current_time
-                return status
+                if result.returncode == 0 and result.stdout:
+                    info = result.stdout
+                    paired = "Paired: yes" in info
+                    connected = "Connected: yes" in info
+                    trusted = "Trusted: yes" in info
 
-            paired = "Paired: yes" in info
-            trusted = "Trusted: yes" in info
-            connected = "Connected: yes" in info
-            pan_active = self._pan_active()
-            interface = self._get_pan_interface() if pan_active else None
-            ip_address = self._get_interface_ip(interface) if interface else None
+                    return {
+                        "paired": paired,
+                        "trusted": trusted,
+                        "connected": connected,
+                        "pan_active": False,  # Already checked above
+                        "interface": None,
+                        "ip_address": None,
+                    }
+            except:
+                pass
 
-            # Get default route interface
-            default_route_interface = self._get_default_route_interface()
-
-            # Only log at debug level to reduce spam
-            logging.debug(
-                f"[bt-tether-helper] Full status - Paired: {paired}, Trusted: {trusted}, Connected: {connected}, PAN: {pan_active}, Interface: {interface}, IP: {ip_address}, Default Route: {default_route_interface}"
-            )
-            status = {
-                "paired": paired,
-                "trusted": trusted,
-                "connected": connected,
-                "pan_active": pan_active,
-                "interface": interface,
-                "ip_address": ip_address,
-                "default_route_interface": default_route_interface,
-            }
-
-            # Cache the result
-            self._status_cache = status
-            self._status_cache_time = current_time
-            return status
-
-        except Exception as e:
-            self._log("ERROR", f"Connection status check error: {e}")
-            status = {
+            # Fallback to disconnected if all checks fail
+            return {
                 "paired": False,
                 "trusted": False,
                 "connected": False,
                 "pan_active": False,
                 "interface": None,
                 "ip_address": None,
-                "default_route_interface": None,
             }
-            # Cache error result too to avoid rapid retries
-            self._status_cache = status
-            self._status_cache_time = current_time
-            return status
+
+        except Exception as e:
+            logging.debug(f"[bt-tether-helper] Status check error: {e}")
+            return {
+                "paired": False,
+                "trusted": False,
+                "connected": False,
+                "pan_active": False,
+                "interface": None,
+                "ip_address": None,
+            }
+
+    def _get_full_connection_status(self, mac):
+        """Get complete connection status - simplified without cache"""
+        # Just use the current status method for consistency
+        return self._get_current_status(mac)
 
     def _scan_devices(self):
         """Scan for Bluetooth devices and return list with MACs and names"""
@@ -2083,9 +2029,6 @@ default-agent
 
         # Reset failure counter on manual reconnect
         self._reconnect_failure_count = 0
-
-        # Invalidate status cache to get fresh status during connection
-        self._invalidate_status_cache()
 
         threading.Thread(target=self._connect_thread, daemon=True).start()
 
@@ -2259,29 +2202,13 @@ default-agent
 
                     if self._check_internet_connectivity():
                         self._log("INFO", "✓ Internet connectivity verified!")
-                        self._connectivity_verified.set()  # Signal BLE thread
-                        self._invalidate_status_cache()  # Invalidate before clearing flag
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"✓ Connected! Internet via {iface}"
-                        # Update device name with new IP if advertise_ip is enabled (after clearing connection flag)
-                        if self.advertise_ip and DBUS_AVAILABLE:
-                            try:
-                                pwn_name = self._get_pwnagotchi_name()
-                                current_ip = self._get_current_ip()
-                                if current_ip:
-                                    self._log(
-                                        "INFO",
-                                        f"Updating device name to: {pwn_name} | {current_ip}",
-                                    )
-                                    self._update_device_name(pwn_name, current_ip)
-                            except Exception as e:
-                                self._log(
-                                    "WARNING", f"Failed to update device name: {e}"
-                                )
+                            self._screen_needs_refresh = True  # Force screen update
+
                     else:
                         self._log("WARNING", "No internet connectivity detected")
-                        self._invalidate_status_cache()  # Invalidate before clearing flag
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = (
@@ -2289,13 +2216,11 @@ default-agent
                             )
                 else:
                     self._log("WARNING", "NAP connected but no interface detected")
-                    self._invalidate_status_cache()  # Invalidate before clearing flag
                     with self.lock:
                         self.status = "CONNECTED"
                         self.message = "Connected but no internet. Enable Bluetooth tethering on phone."
             else:
                 self._log("WARNING", "NAP connection failed")
-                self._invalidate_status_cache()  # Invalidate before clearing flag
                 with self.lock:
                     self.status = "CONNECTED"
                     self.message = "Bluetooth connected but tethering failed. Enable tethering on phone."
@@ -2304,7 +2229,6 @@ default-agent
             self._log("ERROR", f"Connection thread error: {e}")
 
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
-            self._invalidate_status_cache()  # Invalidate before clearing flag
             with self.lock:
                 self.status = "ERROR"
                 self.message = f"Connection error: {str(e)}"
@@ -2312,7 +2236,6 @@ default-agent
         finally:
             # Clear the flag if not already cleared (error cases)
             # Invalidate cache first to ensure fresh status on next UI update
-            self._invalidate_status_cache()
             with self.lock:
                 if self._connection_in_progress:
                     self._connection_in_progress = False
@@ -3457,7 +3380,6 @@ default-agent
                                 self.message = f"🔑 PASSKEY: {self.current_passkey}\n\nVerify this matches on your phone, then tap PAIR!"
 
                             # Invalidate cache so web UI gets fresh status with passkey
-                            self._invalidate_status_cache()
                         elif (
                             "Confirm passkey" in clean_line
                             or "DisplayPasskey" in clean_line
@@ -3481,7 +3403,6 @@ default-agent
                                     self.message = f"🔑 PASSKEY: {self.current_passkey}\n\nVerify this matches on your phone, then tap PAIR!"
 
                                 # Invalidate cache so web UI gets fresh status with passkey
-                                self._invalidate_status_cache()
 
                 # Wait for process to complete
                 returncode = process.wait(timeout=90)
@@ -3519,57 +3440,16 @@ default-agent
             return False
 
     def _start_ble_advertising(self):
-        """Start device name update thread"""
-        try:
-            if self._name_update_thread and self._name_update_thread.is_alive():
-                self._log("INFO", "Device name update thread already running")
-                return
-
-            self._name_update_stop.clear()
-            self._name_update_thread = threading.Thread(
-                target=self._name_update_loop, daemon=True
-            )
-            self._name_update_thread.start()
-            self._log("INFO", "Started device name update thread")
-        except Exception as e:
-            self._log("ERROR", f"Failed to start device name updates: {e}")
+        """Deprecated - device name advertising removed due to Android caching issues"""
+        pass
 
     def _stop_ble_advertising(self):
-        """Stop the device name update thread"""
-        try:
-            if self._name_update_thread and self._name_update_thread.is_alive():
-                self._log("INFO", "Stopping device name updates...")
-                self._name_update_stop.set()
-                self._name_update_thread.join(timeout=5)
-                self._log("INFO", "Device name updates stopped")
-        except Exception as e:
-            self._log("ERROR", f"Error stopping device name updates: {e}")
+        """Deprecated - device name advertising removed due to Android caching issues"""
+        pass
 
     def _name_update_loop(self):
-        """Update device name with IP once after connectivity is verified"""
-        try:
-            self._log("INFO", "Waiting for internet connectivity to be verified...")
-            self._connectivity_verified.wait()  # Block until connectivity is verified
-
-            # Get pwnagotchi name from config
-            pwn_name = self._get_pwnagotchi_name()
-
-            # Get current IP address if enabled
-            current_ip = self._get_current_ip() if self.advertise_ip else None
-
-            if current_ip:
-                self._log("INFO", f"Updating device name with IP: {current_ip}")
-                self._update_device_name(pwn_name, current_ip)
-                self._log(
-                    "INFO", "Device name updated. IP will refresh on reconnection."
-                )
-            else:
-                self._log("WARNING", "No IP found after connectivity verification")
-
-        except Exception as e:
-            self._log("ERROR", f"Device name update error: {e}")
-
-            self._log("ERROR", f"Traceback: {traceback.format_exc()}")
+        """Deprecated - device name advertising removed due to Android caching issues"""
+        pass
 
     def _get_current_ip(self):
         """Get the current IP address from the Bluetooth PAN interface only"""
@@ -3611,47 +3491,15 @@ default-agent
 
         return "pwnagotchi"
 
-    def _update_device_name(self, name, ip):
-        """Update Bluetooth device alias with current name and optionally IP"""
+    def _set_device_name(self):
+        """Set the Bluetooth device name via bluetoothctl"""
         try:
-            import dbus
-
-            # Create device name - with or without IP based on config
-            adv_data = f"{name} | {ip}" if ip else name
-
-            # Use D-Bus to set the adapter alias (device name)
-            bus = dbus.SystemBus()
-            adapter_path = "/org/bluez/hci0"
-
-            try:
-                adapter = dbus.Interface(
-                    bus.get_object("org.bluez", adapter_path),
-                    "org.freedesktop.DBus.Properties",
-                )
-
-                # Set the Alias property - this is the device name shown in Bluetooth settings
-                # Safe to change even when connected, as pairing is based on MAC address
-                adapter.Set("org.bluez.Adapter1", "Alias", dbus.String(adv_data))
-                self._log("INFO", f"Successfully updated device name")
-
-            except dbus.exceptions.DBusException as e:
-                self._log("ERROR", f"D-Bus error: {e}")
-                # Fallback to bluetoothctl
-                self._log("INFO", "Trying bluetoothctl as fallback...")
-                result = self._run_bluetoothctl_command(f"system-alias '{adv_data}'")
-                if result:
-                    self._log("INFO", f"bluetoothctl fallback succeeded")
-
-        except ImportError as e:
-            self._log("ERROR", f"Missing dependencies: {e}")
-            self._log(
-                "ERROR",
-                "Install with: sudo apt-get install -y python3-dbus",
-            )
+            pwnagotchi_name = self._get_pwnagotchi_name()
+            cmd = ["bluetoothctl", "set-alias", pwnagotchi_name]
+            result = self._run_cmd(cmd, timeout=5)
+            self._log("INFO", f"Set Bluetooth device name to: {pwnagotchi_name}")
         except Exception as e:
-            self._log("ERROR", f"Failed to update device name: {e}")
-
-            self._log("ERROR", f"Traceback: {traceback.format_exc()}")
+            self._log("WARNING", f"Failed to set device name: {e}")
 
     def _run_bluetoothctl_command(self, command):
         """Run a single bluetoothctl command"""

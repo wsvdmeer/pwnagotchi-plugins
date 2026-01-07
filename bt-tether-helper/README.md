@@ -162,9 +162,6 @@ main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for
 # Auto-Reconnect Settings
 main.plugins.bt-tether-helper.auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
 main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every N seconds (default: 60)
-
-# IP Advertising (Headless Mode)
-main.plugins.bt-tether-helper.advertise_ip = false  # Show IP in Bluetooth device name (default: false, enable for headless use)
 ```
 
 ### Display Options
@@ -221,16 +218,6 @@ The device will show up in your phone's Bluetooth settings with the updated name
 - **Android**: Settings → Bluetooth
 - **iOS**: Settings → Bluetooth
 
-The device name updates once after internet connectivity is verified, then again on each reconnection.
-
-### Configuration
-
-```toml
-main.plugins.bt-tether-helper.advertise_ip = true  # Enable IP advertising (default: false)
-```
-
-> **Note**: This feature is **disabled by default** to avoid unnecessary name changes. Enable it if you use your Pwnagotchi in headless mode (no display/SSH).
-
 ## Troubleshooting
 
 ### Pairing Fails
@@ -259,15 +246,6 @@ main.plugins.bt-tether-helper.advertise_ip = true  # Enable IP advertising (defa
 - Use the "Disconnect" button in web interface (automatically blocks device)
 - Manual command: `bluetoothctl disconnect XX:XX:XX:XX:XX:XX`
 - If still connected, unpair the device
-
-### IP Not Showing in Device Name
-
-- Ensure `advertise_ip = true` is set in your config.toml
-- Check plugin logs: `pwnlog | grep bt-tether-helper`
-- Ensure internet connectivity is established (feature waits for connectivity verification)
-- Verify Bluetooth service is running: `sudo systemctl status bluetooth`
-- Try restarting Pwnagotchi: `pwnkill`
-- On your phone, try refreshing the Bluetooth device list or toggling Bluetooth off/on
 
 ## Advanced
 
