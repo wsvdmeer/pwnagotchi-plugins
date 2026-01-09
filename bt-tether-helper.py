@@ -23,6 +23,7 @@ Configuration options:
 - main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Phone MAC address
 - main.plugins.bt-tether-helper.auto_reconnect = true  # Auto reconnect on disconnect
 - main.plugins.bt-tether-helper.show_on_screen = true  # Show status on display
+- main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/webhooks/..."  # Discord webhook for IP notifications (optional)
 """
 
 import subprocess
@@ -32,11 +33,21 @@ import logging
 import os
 import re
 import traceback
+import json
 from pwnagotchi.plugins import Plugin
 from flask import render_template_string, request, jsonify
 import pwnagotchi.ui.fonts as fonts
 from pwnagotchi.ui.components import LabeledValue
 from pwnagotchi.ui.view import BLACK
+
+try:
+    import urllib.request
+    import urllib.error
+
+    URLLIB_AVAILABLE = True
+except ImportError:
+    URLLIB_AVAILABLE = False
+    logging.warning("[bt-tether-helper] urllib not available, Discord webhook disabled")
 
 try:
     import dbus
@@ -774,6 +785,24 @@ class BTTetherHelper(Plugin):
             "reconnect_interval", self.DEFAULT_RECONNECT_INTERVAL
         )  # Check connection every N seconds (increased for RPi Zero W2)
 
+        # Discord webhook configuration
+        self.discord_webhook_url = self.options.get(
+            "discord_webhook_url", ""
+        )  # Discord webhook URL for IP notifications (optional)
+
+        # Log webhook configuration status (mask the webhook token for security)
+        if self.discord_webhook_url:
+            # Mask the webhook token (last part of URL) for logging
+            masked_url = self.discord_webhook_url
+            if "/" in masked_url:
+                parts = masked_url.split("/")
+                if len(parts) > 0:
+                    parts[-1] = "***" + parts[-1][-4:] if len(parts[-1]) > 4 else "****"
+                    masked_url = "/".join(parts)
+            logging.info(f"[bt-tether-helper] Discord webhook configured: {masked_url}")
+        else:
+            logging.info("[bt-tether-helper] Discord webhook not configured")
+
         # Lock to prevent multiple bluetoothctl commands from running simultaneously
         self._bluetoothctl_lock = threading.Lock()
 
@@ -1390,6 +1419,35 @@ default-agent
                     time.sleep(self.INTERNET_VERIFY_WAIT)
                     if self._check_internet_connectivity():
                         self._log("INFO", f"✓ Internet connectivity verified!")
+
+                        # Get IP address and send Discord notification if configured
+                        try:
+                            current_ip = self._get_current_ip()
+                            if current_ip:
+                                self._log("INFO", f"Current IP address: {current_ip}")
+                                if self.discord_webhook_url:
+                                    self._log(
+                                        "INFO",
+                                        "Discord webhook configured, starting notification thread...",
+                                    )
+                                    threading.Thread(
+                                        target=self._send_discord_notification,
+                                        args=(current_ip,),
+                                        daemon=True,
+                                    ).start()
+                                else:
+                                    self._log(
+                                        "DEBUG",
+                                        "Discord webhook not configured, skipping notification",
+                                    )
+                            else:
+                                self._log(
+                                    "WARNING",
+                                    "Could not get IP address for Discord notification",
+                                )
+                        except Exception as e:
+                            self._log("ERROR", f"Failed to send Discord notification: {e}")
+
                         # Update status and force screen refresh
                         with self.lock:
                             self.status = "CONNECTED"
@@ -2202,6 +2260,35 @@ default-agent
 
                     if self._check_internet_connectivity():
                         self._log("INFO", "✓ Internet connectivity verified!")
+
+                        # Get IP address and send Discord notification if configured
+                        try:
+                            current_ip = self._get_current_ip()
+                            if current_ip:
+                                self._log("INFO", f"Current IP address: {current_ip}")
+                                if self.discord_webhook_url:
+                                    self._log(
+                                        "INFO",
+                                        "Discord webhook configured, starting notification thread...",
+                                    )
+                                    threading.Thread(
+                                        target=self._send_discord_notification,
+                                        args=(current_ip,),
+                                        daemon=True,
+                                    ).start()
+                                else:
+                                    self._log(
+                                        "DEBUG",
+                                        "Discord webhook not configured, skipping notification",
+                                    )
+                            else:
+                                self._log(
+                                    "WARNING",
+                                    "Could not get IP address for Discord notification",
+                                )
+                        except Exception as e:
+                            self._log("ERROR", f"Failed to send Discord notification: {e}")
+
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"✓ Connected! Internet via {iface}"
@@ -3450,6 +3537,88 @@ default-agent
     def _name_update_loop(self):
         """Deprecated - device name advertising removed due to Android caching issues"""
         pass
+
+    def _send_discord_notification(self, ip_address):
+        """Send IP address notification to Discord webhook if configured"""
+        self._log("INFO", f"Discord notification function called with IP: {ip_address}")
+
+        if not self.discord_webhook_url:
+            self._log(
+                "DEBUG", "Discord webhook URL not configured, skipping notification"
+            )
+            return
+
+        if not URLLIB_AVAILABLE:
+            self._log(
+                "WARNING", "urllib not available, cannot send Discord notification"
+            )
+            return
+
+        self._log("INFO", f"Sending Discord notification to webhook...")
+        try:
+            pwnagotchi_name = self._get_pwnagotchi_name()
+
+            # Create Discord embed message
+            data = {
+                "embeds": [
+                    {
+                        "title": "🔷 Bluetooth Tethering Connected",
+                        "description": f"**{pwnagotchi_name}** is now connected via Bluetooth",
+                        "color": 3447003,  # Blue color
+                        "fields": [
+                            {
+                                "name": "IP Address",
+                                "value": f"`{ip_address}`",
+                                "inline": True,
+                            },
+                            {
+                                "name": "Device",
+                                "value": pwnagotchi_name,
+                                "inline": True,
+                            },
+                        ],
+                        "timestamp": time.strftime(
+                            "%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()
+                        ),
+                    }
+                ]
+            }
+
+            self._log("DEBUG", f"Discord payload prepared, sending HTTP POST...")
+
+            # Send POST request to Discord webhook
+            json_data = json.dumps(data).encode("utf-8")
+            req = urllib.request.Request(
+                self.discord_webhook_url,
+                data=json_data,
+                headers={
+                    "Content-Type": "application/json",
+                    "User-Agent": "Pwnagotchi-BT-Tether/1.0",
+                },
+            )
+
+            self._log("INFO", "Sending HTTP POST to Discord webhook...")
+            with urllib.request.urlopen(req, timeout=10) as response:
+                status_code = response.status
+                self._log("INFO", f"Discord webhook response status: {status_code}")
+                if status_code == 204:
+                    self._log("INFO", "✓ Discord notification sent successfully")
+                else:
+                    response_body = response.read().decode("utf-8")
+                    self._log(
+                        "WARNING",
+                        f"Discord webhook returned status {status_code}: {response_body}",
+                    )
+
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8") if e.fp else "No response body"
+            self._log("ERROR", f"Discord webhook HTTP error {e.code}: {e.reason}")
+            self._log("ERROR", f"Response body: {error_body}")
+        except urllib.error.URLError as e:
+            self._log("ERROR", f"Discord webhook failed (network error): {e.reason}")
+        except Exception as e:
+            self._log("ERROR", f"Discord webhook failed: {type(e).__name__}: {e}")
+            self._log("ERROR", f"Traceback: {traceback.format_exc()}")
 
     def _get_current_ip(self):
         """Get the current IP address from the Bluetooth PAN interface only"""

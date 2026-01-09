@@ -31,6 +31,7 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 - **Device Scanning**: Scan for nearby Bluetooth devices to find and copy MAC addresses
 - **Status Display**: Real-time connection status on Pwnagotchi screen
 - **PAN (Personal Area Network) Support**: Automatic network interface configuration
+- **Discord Notifications**: Optional webhook notifications when connected with IP address
 
 ## Installation
 
@@ -155,6 +156,9 @@ main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for
 # Auto-Reconnect Settings
 main.plugins.bt-tether-helper.auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
 main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every N seconds (default: 60)
+
+# Discord Notifications (Optional)
+main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"  # Send IP notifications to Discord (optional)
 ```
 
 ### Display Options
@@ -197,6 +201,35 @@ The plugin includes automatic reconnection monitoring:
 - **Non-intrusive**: Won't interfere with manual connection/disconnection operations
 
 To disable auto-reconnect, set `main.plugins.bt-tether-helper.auto_reconnect = false` in your config.
+
+### Discord Notifications
+
+Get notified when your Pwnagotchi connects via Bluetooth tethering:
+
+- **Optional Feature**: Only activates when `discord_webhook_url` is configured
+- **IP Address Notifications**: Automatically sends your device's IP address to a private Discord channel
+- **Works with Auto-Reconnect**: Notifications sent both on manual connections and automatic reconnections
+- **Easy Setup**: Just create a Discord webhook and add the URL to your config
+- **Non-Blocking**: Runs in background thread, won't delay connection even if webhook fails
+
+**How to set up Discord webhook:**
+
+1. In your Discord server, go to Server Settings → Integrations → Webhooks
+2. Click "New Webhook"
+3. Give it a name (e.g., "Pwnagotchi BT")
+4. Select the channel where you want notifications
+5. Copy the webhook URL
+6. Add it to your config: `main.plugins.bt-tether-helper.discord_webhook_url = "YOUR_WEBHOOK_URL"`
+7. Restart Pwnagotchi: `pwnkill`
+
+When your device connects, you'll receive a notification with the IP address and device name!
+
+**Troubleshooting Discord Notifications:**
+
+- Check logs with `pwnlog` to see if the webhook is being called
+- Verify the webhook URL is correct in your config
+- Make sure your Pwnagotchi has internet access via the Bluetooth connection
+- Test the webhook URL directly with a tool like curl to verify it's working
 
 ## Troubleshooting
 
