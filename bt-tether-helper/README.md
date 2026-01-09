@@ -1,15 +1,16 @@
 # bt-tether-helper
 
-> **Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
-> **Warning:** Do not enable both this plugin and the default bt-tether.py at the same time. Only one Bluetooth tethering plugin should be active to avoid conflicts.
+> **🚧 Work in Progress:** This plugin is currently under active development. Features and functionality may change.
+>
+> **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
+>
+> **⚠️ Warning:** Do not enable both this plugin and the default bt-tether.py at the same time. Only one Bluetooth tethering plugin should be active to avoid conflicts.
+>
+> **✅ Important:** This plugin has been tested on an **Android 15** and **iOS 26.1** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
 
 A comprehensive Bluetooth tethering plugin that provides guided setup and automatic connection management for sharing your phone's internet connection with your Pwnagotchi.
 
 ![bt-tether-helper Web Interface](ui.png)
-
-> **🚧 Work in Progress:** This plugin is currently under active development. Features and functionality may change.
-
-> **⚠️ Important:** This plugin has been tested on an **Android 15** and **iOS 26.1** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
 
 ## Tested Hardware Configuration
 
@@ -82,7 +83,7 @@ When multiple network interfaces are active (e.g., USB and Bluetooth), the web i
 - **Active Route Indicator**: Shows which interface (usb0, bnep0, etc.) is currently handling internet traffic
 - **USB Priority Warning**: Alerts when USB connection has priority over Bluetooth (USB typically has lower route metric)
 
-> **Note:** When USB is connected, internet traffic uses the USB connection by default. Bluetooth tethering remains active as a standby connection and takes over automatically when USB is disconnected.
+> **Note:** When multiple network interfaces are available (such as USB, Ethernet, or Bluetooth), internet traffic is always routed through the best available connection by default. Typically, the system prioritizes interfaces in this order: Ethernet (`eth0`), USB (`usb0`), then Bluetooth (`bnep0`). Bluetooth tethering remains active as a standby connection and will automatically take over if higher-priority connections (like USB or Ethernet) are disconnected. You can view the currently active interface and routing details in the web interface's status section. This ensures your Pwnagotchi always uses the most reliable and fastest available connection for internet access.
 
 ### Testing Internet Connectivity
 
@@ -236,6 +237,12 @@ To disable auto-reconnect, set `main.plugins.bt-tether-helper.auto_reconnect = f
 Settings → About Phone → Status → Bluetooth address
 ```
 
+**iOS:**
+
+```
+Settings → General → About → Bluetooth
+```
+
 **Via Terminal:**
 
 ```bash
@@ -263,10 +270,6 @@ GPL3
 ## Author
 
 **wsvdmeer**
-
-## Version
-
-0.9.9-beta
 
 ## Support
 
