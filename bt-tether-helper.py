@@ -717,7 +717,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.0.1"
+    __version__ = "1.1.1"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1446,7 +1446,9 @@ default-agent
                                     "Could not get IP address for Discord notification",
                                 )
                         except Exception as e:
-                            self._log("ERROR", f"Failed to send Discord notification: {e}")
+                            self._log(
+                                "ERROR", f"Failed to send Discord notification: {e}"
+                            )
 
                         # Update status and force screen refresh
                         with self.lock:
@@ -2287,7 +2289,9 @@ default-agent
                                     "Could not get IP address for Discord notification",
                                 )
                         except Exception as e:
-                            self._log("ERROR", f"Failed to send Discord notification: {e}")
+                            self._log(
+                                "ERROR", f"Failed to send Discord notification: {e}"
+                            )
 
                         with self.lock:
                             self.status = "CONNECTED"
