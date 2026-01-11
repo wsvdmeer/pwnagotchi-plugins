@@ -113,6 +113,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
         <div style="color: #888; margin-bottom: 4px;">Configured MAC address:</div>
         <div style="color: #4ec9b0; font-size: 14px;">{{ mac if mac else 'Not configured' }}</div>
+        <div style="color: #888; margin-bottom: 4px; margin-top: 8px;">Discord Webhook:</div>
+        <div style="color: {% if discord_webhook_url %}#4ec9b0{% else %}#f48771{% endif %}; font-size: 14px;">{% if discord_webhook_url %}✓ Enabled{% else %}✗ Disabled{% endif %}</div>
       </div>
       
       <!-- Status in output style -->
@@ -717,7 +719,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.1.1"
+    __version__ = "1.1.2"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1622,6 +1624,7 @@ default-agent
                         mac=self.phone_mac,
                         status=self.status,
                         message=self.message,
+                        discord_webhook_url=self.discord_webhook_url,
                     )
 
             if clean_path == "connect":

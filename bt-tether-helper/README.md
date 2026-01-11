@@ -12,6 +12,8 @@ A comprehensive Bluetooth tethering plugin that provides guided setup and automa
 
 ![bt-tether-helper Web Interface](ui.png)
 
+![bt-tether-helper Screen Interface](screen.png)
+
 ## Tested Hardware Configuration
 
 **Development & Testing:**
