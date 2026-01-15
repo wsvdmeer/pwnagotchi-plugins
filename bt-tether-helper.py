@@ -22,7 +22,11 @@ Setup:
 Configuration options:
 - main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Phone MAC address
 - main.plugins.bt-tether-helper.auto_reconnect = true  # Auto reconnect on disconnect
-- main.plugins.bt-tether-helper.show_on_screen = true  # Show status on display
+- main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: Show status on display (disables both mini and detailed when false)
+- main.plugins.bt-tether-helper.show_mini_status = true  # Show mini status indicator (single letter: C/N/P/D)
+- main.plugins.bt-tether-helper.mini_status_position = null  # Position for mini status (null = auto top-right)
+- main.plugins.bt-tether-helper.show_detailed_status = true  # Show detailed status line with IP
+- main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for detailed status line
 - main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/webhooks/..."  # Discord webhook for IP notifications (optional)
 """
 
@@ -719,7 +723,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.1.2"
+    __version__ = "1.1.4"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -764,12 +768,19 @@ class BTTetherHelper(Plugin):
         # UI Log buffer - store last N log messages
         self._ui_logs = deque(maxlen=self.UI_LOG_MAXLEN)
         self._ui_log_lock = threading.Lock()
-        self.ui_position = self.options.get(
-            "position", None
-        )  # Screen position for status (None = auto top-right)
+
+        # Master switch for all screen displays
         self.show_on_screen = self.options.get(
             "show_on_screen", True
-        )  # Enable/disable screen display
+        )  # Master switch: Enable/disable all screen displays
+
+        # Mini status indicator configuration (single letter: C/N/P/D)
+        self.show_mini_status = self.options.get(
+            "show_mini_status", True
+        )  # Show mini status indicator
+        self.mini_status_position = self.options.get(
+            "mini_status_position", None
+        )  # Position for mini status (None = auto top-right)
 
         # Detailed status line configuration
         self.show_detailed_status = self.options.get(
@@ -859,12 +870,16 @@ class BTTetherHelper(Plugin):
             self._log(
                 "WARNING", "on_ready() was not called, using fallback initialization"
             )
-            self._initialize_bluetooth_services()
+            # Check if initialization is already done or in progress before starting
+            if not self._initialization_done.is_set():
+                self._initialization_done.set()
+                self._initialize_bluetooth_services()
 
     def on_ready(self, agent):
         """Called when everything is ready and the main loop is about to start"""
         self._log("INFO", "on_ready() called, initializing Bluetooth services...")
         # Signal that on_ready was called (prevents fallback from running)
+        # Only initialize if not already done
         if not self._initialization_done.is_set():
             self._initialization_done.set()
             self._initialize_bluetooth_services()
@@ -1002,9 +1017,14 @@ class BTTetherHelper(Plugin):
 
     def on_ui_setup(self, ui):
         """Setup UI elements to display Bluetooth status on screen"""
-        if self.show_on_screen:
+        # Mini status indicator (single letter: C/N/P/D)
+        if self.show_on_screen and self.show_mini_status:
             # If position not specified, place in top-right of screen
-            pos = self.ui_position if self.ui_position else (ui.width() / 2 + 50, 0)
+            pos = (
+                self.mini_status_position
+                if self.mini_status_position
+                else (ui.width() / 2 + 50, 0)
+            )
             ui.add_element(
                 "bt-status",
                 LabeledValue(
@@ -1017,8 +1037,8 @@ class BTTetherHelper(Plugin):
                 ),
             )
 
-        # Add detailed status line
-        if self.show_detailed_status:
+        # Detailed status line
+        if self.show_on_screen and self.show_detailed_status:
             ui.add_element(
                 "bt-detail",
                 LabeledValue(
@@ -1033,6 +1053,7 @@ class BTTetherHelper(Plugin):
 
     def on_ui_update(self, ui):
         """Update Bluetooth status on screen"""
+        # Master switch check - if disabled, don't update anything
         if not self.show_on_screen or not self.phone_mac:
             return
 
@@ -1047,25 +1068,29 @@ class BTTetherHelper(Plugin):
             # Handle state transitions first (highest priority)
             # These flags are set during operations and should display immediately
             if initializing:
-                ui.set("bt-status", "I")  # I = Initializing
+                if self.show_mini_status:
+                    ui.set("bt-status", "I")  # I = Initializing
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Initializing")
                 return
 
             if disconnecting:
-                ui.set("bt-status", "D")  # D = Disconnecting
+                if self.show_mini_status:
+                    ui.set("bt-status", "D")  # D = Disconnecting
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Disconnecting")
                 return
 
             if untrusting:
-                ui.set("bt-status", "U")  # U = Untrusting
+                if self.show_mini_status:
+                    ui.set("bt-status", "U")  # U = Untrusting
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Untrusting")
                 return
 
             if connection_in_progress:
-                ui.set("bt-status", ">")  # > = Connecting
+                if self.show_mini_status:
+                    ui.set("bt-status", ">")  # > = Connecting
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Connecting")
                 return
@@ -1089,8 +1114,9 @@ class BTTetherHelper(Plugin):
             else:
                 display = "X"  # Disconnected
 
-            # Always update the UI element
-            ui.set("bt-status", display)
+            # Update mini status if enabled
+            if self.show_mini_status:
+                ui.set("bt-status", display)
 
             # Update detailed status line if enabled
             if self.show_detailed_status:
@@ -1109,7 +1135,8 @@ class BTTetherHelper(Plugin):
             logging.debug(f"[bt-tether-helper] UI update error: {e}")
             # Set to unknown state if error occurs
             try:
-                ui.set("bt-status", "?")
+                if self.show_mini_status:
+                    ui.set("bt-status", "?")
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Error")
             except:

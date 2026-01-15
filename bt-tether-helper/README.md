@@ -147,9 +147,12 @@ Both displays update in real-time based on connection state.
 main.plugins.bt-tether-helper.enabled = true  # Enable the plugin
 main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC address
 
-# Display Settings - Compact Status (single-letter indicator)
-main.plugins.bt-tether-helper.show_on_screen = true  # Show compact status on display (default: true)
-main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] for compact status (optional, default: auto top-right)
+# Display Settings - Master Switch
+main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: enable/disable all screen displays (default: true)
+
+# Display Settings - Mini Status (single-letter indicator)
+main.plugins.bt-tether-helper.show_mini_status = true  # Show mini status indicator (default: true)
+main.plugins.bt-tether-helper.mini_status_position = [200, 0]  # Custom position [x, y] for mini status (optional, default: auto top-right)
 
 # Display Settings - Detailed Status (full status line with IP)
 main.plugins.bt-tether-helper.show_detailed_status = true  # Show detailed status line with IP (default: true)
@@ -165,9 +168,17 @@ main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/web
 
 ### Display Options
 
-**Compact Status (`show_on_screen`):**
+**Master Switch (`show_on_screen`):**
 
-- Shows single-letter status in top-right corner
+- Global toggle to enable/disable all screen displays
+- When set to `false`, no status information will be shown on screen
+- Default: `true`
+
+**Mini Status (`show_mini_status`):**
+
+- Shows single-letter status indicator
+- Position can be customized with `mini_status_position` (default: auto top-right corner)
+- Requires `show_on_screen = true`
 - **I** = Initializing (plugin startup)
 - **C** = Connected with internet (PAN active)
 - **T** = Connected and trusted (no internet yet)
