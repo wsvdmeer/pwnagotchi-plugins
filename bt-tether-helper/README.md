@@ -145,17 +145,17 @@ Both displays update in real-time based on connection state.
 main.plugins.bt-tether-helper.enabled = true  # Enable the plugin
 main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC address
 
-# Display Settings - Compact Status (single-letter indicator)
-main.plugins.bt-tether-helper.show_on_screen = true  # Show compact status on display (default: true)
-main.plugins.bt-tether-helper.position = [200, 0]  # Custom position [x, y] for compact status (optional, default: auto top-right)
-
-# Display Settings - Detailed Status (full status line with IP)
+# Display Settings
+main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: enable/disable all on-screen display (default: true)
+main.plugins.bt-tether-helper.show_mini_status = true  # Show compact mini status indicator (single letter) (default: true)
+main.plugins.bt-tether-helper.mini_status_position = null  # Position [x, y] for mini status (null = auto top-right)
 main.plugins.bt-tether-helper.show_detailed_status = true  # Show detailed status line with IP (default: true)
 main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for detailed status (default: [0, 82])
 
 # Auto-Reconnect Settings
 main.plugins.bt-tether-helper.auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
 main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every N seconds (default: 60)
+main.plugins.bt-tether-helper.reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (default: 300 = 5 minutes)
 
 # Discord Notifications (Optional)
 main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"  # Send IP notifications to Discord (optional)
@@ -163,19 +163,25 @@ main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/web
 
 ### Display Options
 
-**Compact Status (`show_on_screen`):**
+**Master Switch (`show_on_screen`):**
 
-- Shows single-letter status in top-right corner
+- When `false`, disables ALL on-screen display (both mini and detailed status)
+- When `true`, allows mini and detailed status to be shown based on their individual settings
+
+**Mini Status (`show_mini_status`):**
+
+- Shows single-letter status indicator (typically top-right corner)
 - **I** = Initializing (plugin startup)
 - **C** = Connected with internet (PAN active)
 - **T** = Connected and trusted (no internet yet)
 - **N** = Connected but not trusted
 - **P** = Paired but not connected
-- **D** = Disconnecting (in progress)
+- **>** = Connecting/Pairing/Reconnecting in progress
+- **X** = Disconnecting or Disconnected
 - **U** = Untrusting (removing trust)
-- **>** = Connecting/Pairing in progress
-- **X** = Disconnected (fully disconnected)
 - **?** = Unknown/Error
+
+Position can be customized with `mini_status_position = [x, y]` or set to `null` for automatic top-right placement.
 
 **Detailed Status (`show_detailed_status`):**
 
@@ -186,21 +192,131 @@ main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/web
 - **BT:Connected** = Connected but not trusted
 - **BT:Paired** = Paired but not connected
 - **BT:Connecting...** = Connection in progress
+- **BT:Reconnecting...** = Auto-reconnection in progress
 - **BT:Disconnecting...** = Disconnection in progress
 - **BT:Untrusting...** = Removing trust from device
 - **BT:Disconnected** = Not connected
 - **BT:Error** = Error/unknown state
 
+Customize position with `detailed_status_position = [x, y]`.
+
 ### Auto-Reconnect
 
-The plugin includes automatic reconnection monitoring:
+The plugin includes intelligent automatic reconnection monitoring with failure backoff:
 
-- **Enabled by default**: The plugin monitors your Bluetooth connection and automatically reconnects if it drops
-- **Configurable interval**: Check connection status every 60 seconds by default (configurable via `reconnect_interval`)
+- **Enabled by default**: Monitors your Bluetooth connection and automatically reconnects if it drops
+- **Configurable interval**: Checks connection status every 60 seconds by default (via `reconnect_interval`)
 - **Smart reconnection**: Only attempts reconnection when device is paired/trusted but disconnected
+- **Failure handling**: After 5 consecutive failed reconnection attempts, enters a 5-minute cooldown period
 - **Non-intrusive**: Won't interfere with manual connection/disconnection operations
+- **Respects user actions**: Doesn't auto-reconnect if you manually disconnected the device
 
 To disable auto-reconnect, set `main.plugins.bt-tether-helper.auto_reconnect = false` in your config.
+
+## Connection & Reconnection Flows
+
+### Initial Connection Flow (First Time Pairing)
+
+1. **User initiates connection** via web interface or plugin startup
+2. **Pwnagotchi becomes discoverable** - Bluetooth adapter set to pairable/discoverable mode
+3. **Remove old pairing** (if exists) - Ensures clean pairing state
+4. **Unblock device** - Removes any previous blocks
+5. **Pairing request sent** - Pwnagotchi requests pairing with phone
+6. **Passkey dialog appears** on phone - User must accept within 90 seconds
+7. **Trust device** - After successful pairing, device is marked as trusted for auto-connect
+8. **Connect NAP service** - Establishes Bluetooth network connection (PAN profile)
+9. **Wait for network interface** - bnep0 interface creation (up to 5 seconds)
+10. **Configure network** - DHCP request to obtain IP address from phone
+11. **Verify internet** - Tests connectivity to ensure tethering is working
+12. **Status: CONNECTED** - Display shows "C" with IP address
+
+**Typical duration:** 20-45 seconds for first-time pairing
+
+### Subsequent Connection Flow (Already Paired)
+
+1. **User initiates connection** or auto-reconnect triggered
+2. **Verify device status** - Check if paired and trusted
+3. **Unblock device** (if needed)
+4. **Ensure trust** - Re-trust device to enable auto-connect
+5. **Connect NAP service** - Establish tethering connection
+6. **Wait for interface** - bnep0 appears
+7. **Configure network** - DHCP configuration
+8. **Verify internet** - Connectivity test
+9. **Status: CONNECTED** - Ready to use
+
+**Typical duration:** 10-20 seconds (no pairing dialog needed)
+
+### Automatic Reconnection Flow
+
+When connection drops (phone BT disabled, out of range, etc.):
+
+1. **Monitor detects disconnection** - Checks every 60 seconds via `bluetoothctl info` and network interface status
+2. **Triggers reconnection** - Sets status to "RECONNECTING"
+3. **Attempt reconnect** - Follows subsequent connection flow
+4. **Success handling:**
+   - Resets failure counter
+   - Updates status to CONNECTED
+   - Continues monitoring
+5. **Failure handling:**
+   - Increments failure counter (max 5 attempts)
+   - After 5 failures: Enters cooldown mode for 5 minutes
+   - After cooldown: Resets counter and tries again
+   - Logs warnings to help diagnose issues
+
+**Reconnection intervals:**
+
+- **Normal**: Every 60 seconds (configurable via `reconnect_interval`)
+- **After 5 failures**: 5-minute cooldown (configurable via `reconnect_failure_cooldown`)
+
+### Disconnection Detection Methods
+
+The plugin uses multiple layers to detect when a device disconnects:
+
+1. **Fast Path - Network Interface Check:**
+
+   ```bash
+   ip link show  # Check for bnep interface
+   ip addr show bnep0  # Check for IP address
+   ```
+
+   If bnep interface disappears or loses IP → Connection lost
+
+2. **Slow Path - Bluetooth Status Check:**
+
+   ```bash
+   bluetoothctl info XX:XX:XX:XX:XX:XX
+   ```
+
+   Parses output for:
+
+   - `Connected: yes/no` - Bluetooth connection status
+   - `Paired: yes/no` - Pairing status
+   - `Trusted: yes/no` - Trust/auto-connect status
+
+3. **State Comparison:**
+   - Compares current `connected` status with previous check
+   - If was connected (`True`) and now isn't (`False`) → Disconnection detected
+   - Triggers auto-reconnect flow (unless user manually disconnected)
+
+**What triggers reconnection:**
+
+- Phone Bluetooth disabled → `Connected: no`
+- Phone out of range → `Connected: no`
+- Tethering disabled on phone → bnep interface disappears
+- Connection lost for any reason → Status change detection
+
+### Manual Disconnection
+
+When you click "Disconnect" in the web interface:
+
+1. **Disconnect initiated** - Sets `_user_requested_disconnect = True`
+2. **NAP disconnect** - Closes Bluetooth network connection
+3. **Block device** - Prevents automatic reconnection
+4. **Optional: Unpair** - If "Also unpair device" is checked, removes pairing (requires passkey on next connection)
+5. **Status: DISCONNECTED** - Monitor won't attempt auto-reconnect
+6. **Interface cleanup** - bnep interface removed
+
+To reconnect after manual disconnect, use the web interface "Connect" button.
 
 ### Discord Notifications
 
