@@ -10,7 +10,249 @@ from collections import deque
 from pwnagotchi import plugins
 from pwnagotchi.ui.components import LabeledValue
 from pwnagotchi.ui.view import BLACK
+from flask import render_template_string
 import pwnagotchi.ui.fonts as fonts
+
+
+# -------------------------
+# HTML Template
+# -------------------------
+
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html>
+  <head>
+    <title>ParasiteAI Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+      body { font-family: sans-serif; padding: 20px; max-width: 600px; margin: 0 auto; background: #0d1117; color: #d4d4d4; }
+      .card { background: #161b22; padding: 20px; border-radius: 8px; margin-bottom: 16px; box-shadow: 0 2px 4px rgba(0,0,0,0.3); border: 1px solid #30363d; }
+      h2 { margin: 0 0 20px 0; color: #58a6ff; }
+      h3 { color: #d4d4d4; }
+      h4 { color: #8b949e; }
+      input { padding: 10px; font-size: 14px; border: 1px solid #30363d; border-radius: 4px; background: #0d1117; color: #d4d4d4; }
+      input:focus { outline: none; border-color: #58a6ff; background: #161b22; }
+      button { padding: 10px 20px; background: transparent; color: #3fb950; border: 1px solid #3fb950; cursor: pointer; font-size: 14px; border-radius: 4px; margin-right: 8px; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; }
+      button:hover { background: rgba(63, 185, 80, 0.1); border-color: #3fb950; }
+      button.danger { color: #f85149; border-color: #f85149; }
+      button.danger:hover { background: rgba(248, 81, 73, 0.1); }
+      button:disabled { background: transparent; color: #8b949e; cursor: not-allowed; border-color: #30363d; }
+      .status-item { padding: 8px; margin: 4px 0; border-radius: 4px; background: #161b22; border: 1px solid #30363d; color: #d4d4d4; }
+      .status-good { background: rgba(46, 160, 67, 0.15); color: #3fb950; border-color: #3fb950; }
+      .status-bad { background: rgba(248, 81, 73, 0.15); color: #f85149; border-color: #f85149; }
+      .status-warning { background: rgba(214, 159, 0, 0.15); color: #d29922; border-color: #d29922; }
+      .message-box { padding: 12px; border-radius: 4px; margin: 12px 0; border-left: 4px solid; }
+      .message-info { background: rgba(88, 166, 255, 0.1); color: #79c0ff; border-color: #79c0ff; }
+      .message-success { background: rgba(63, 185, 80, 0.1); color: #3fb950; border-color: #3fb950; }
+      .message-warning { background: rgba(214, 159, 0, 0.1); color: #d29922; border-color: #d29922; }
+      .message-error { background: rgba(248, 81, 73, 0.1); color: #f85149; border-color: #f85149; }
+      .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 12px 0; }
+      .stat-box { background: #0d1117; padding: 12px; border-radius: 4px; border: 1px solid #30363d; }
+      .stat-label { color: #8b949e; font-size: 12px; margin-bottom: 4px; }
+      .stat-value { color: #4ec9b0; font-size: 18px; font-weight: bold; }
+      .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #30363d; 
+                 border-top: 2px solid #58a6ff; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle; }
+      @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+      .log-viewer { background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; line-height: 1.5; border: 1px solid #30363d; }
+      .log-entry { margin: 2px 0; }
+      .log-error { color: #f48771; }
+      .log-warning { color: #dcdcaa; }
+      .log-info { color: #4fc1ff; }
+      .log-debug { color: #888; }
+      .log-timestamp { color: #888; margin-right: 8px; }
+      .log-level { font-weight: bold; margin-right: 8px; }
+    </style>
+  </head>
+  <body>
+    <h2>🦠 ParasiteAI Dashboard</h2>
+    
+    <!-- Status Card -->
+    <div class="card">
+      <h3 style="margin: 0 0 12px 0;">📊 Current Status</h3>
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-label">Current Mood</div>
+          <div class="stat-value" id="moodValue">Loading...</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">State</div>
+          <div class="stat-value" id="stateValue">Loading...</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Aggression Level</div>
+          <div class="stat-value" id="aggressionValue">Loading...</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Consecutive Fails</div>
+          <div class="stat-value" id="failsValue">Loading...</div>
+        </div>
+      </div>
+      
+      <!-- Statistics -->
+      <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-top: 12px; border: 1px solid #30363d;">
+        <div style="display: flex; justify-content: space-between; margin: 8px 0;">
+          <span>✓ Successful Handshakes:</span>
+          <span style="color: #3fb950; font-weight: bold;" id="successCount">0</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin: 8px 0;">
+          <span>✗ Failed Attacks:</span>
+          <span style="color: #f85149; font-weight: bold;" id="failCount">0</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin: 8px 0;">
+          <span>📈 Success Rate:</span>
+          <span style="color: #4ec9b0; font-weight: bold;" id="successRate">0%</span>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Aggression Control -->
+    <div class="card">
+      <h3 style="margin: 0 0 12px 0;">⚡ Aggression Control</h3>
+      <div style="margin-bottom: 12px;">
+        <button onclick="changeAggression('mellow')" style="width: 100%; margin: 0 0 8px 0;">😴 Mellow</button>
+        <button onclick="changeAggression('balanced')" style="width: 100%; margin: 0 0 8px 0;">👀 Balanced</button>
+        <button onclick="changeAggression('aggro')" style="width: 100%; margin: 0 0 8px 0;">😈 Aggressive</button>
+      </div>
+      <small style="color: #8b949e; display: block;">Control AI aggression level and attack probability</small>
+    </div>
+    
+    <!-- Plugin Options -->
+    <div class="card">
+      <h3 style="margin: 0 0 12px 0;">⚙️ Plugin Options</h3>
+      <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; border: 1px solid #30363d;">
+        <div style="display: flex; justify-content: space-between; margin: 8px 0;">
+          <span>Min RSSI:</span>
+          <span style="color: #4ec9b0; font-weight: bold;" id="minRssi">-80</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin: 8px 0;">
+          <span>Min Clients:</span>
+          <span style="color: #4ec9b0; font-weight: bold;" id="minClients">0</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin: 8px 0;">
+          <span>Max Consecutive Fails:</span>
+          <span style="color: #4ec9b0; font-weight: bold;" id="maxFails">3</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin: 8px 0;">
+          <span>Save Interval:</span>
+          <span style="color: #4ec9b0; font-weight: bold;" id="saveInterval">10</span>
+        </div>
+        <div style="display: flex; justify-content: space-between; margin: 8px 0;">
+          <span>Debug Logs:</span>
+          <span style="color: #4ec9b0; font-weight: bold;" id="debugLogs">OFF</span>
+        </div>
+      </div>
+    </div>
+    
+    <!-- Logs -->
+    <div class="card">
+      <h3 style="margin: 0 0 12px 0;">📋 Logs</h3>
+      <div id="logViewer" class="log-viewer">
+        <div style="color: #888;">Loading logs...</div>
+      </div>
+    </div>
+    
+    <script>
+      // Auto-refresh status every 2 seconds
+      function updateStatus() {
+        fetch('/plugins/parasite-ai/status')
+          .then(r => r.json())
+          .then(data => {
+            console.log('Status data:', data);
+            if (data.error) {
+              console.error('Status API error:', data.error);
+              return;
+            }
+            document.getElementById('stateValue').textContent = (data.state || 'UNKNOWN').toUpperCase();
+            document.getElementById('moodValue').textContent = data.mood || 'Unknown';
+            document.getElementById('aggressionValue').textContent = (data.aggression || 'unknown').toUpperCase();
+            document.getElementById('failsValue').textContent = data.consecutive_fails || 0;
+            document.getElementById('successCount').textContent = data.success || 0;
+            document.getElementById('failCount').textContent = data.fail || 0;
+            
+            // Calculate success rate
+            const total = (data.success || 0) + (data.fail || 0);
+            const rate = total > 0 ? Math.round((data.success / total) * 100) : 0;
+            document.getElementById('successRate').textContent = rate + '%';
+          })
+          .catch(e => console.error('Status fetch failed:', e));
+      }
+      
+      function updateOptions() {
+        fetch('/plugins/parasite-ai/options')
+          .then(r => r.json())
+          .then(data => {
+            console.log('Options data:', data);
+            if (data.error) {
+              console.error('Options API error:', data.error);
+              return;
+            }
+            document.getElementById('minRssi').textContent = data.min_rssi || '-80';
+            document.getElementById('minClients').textContent = data.min_clients || '0';
+            document.getElementById('maxFails').textContent = data.max_consecutive_fails || '3';
+            document.getElementById('saveInterval').textContent = data.save_interval || '10';
+            document.getElementById('debugLogs').textContent = data.enable_debug_logs ? 'ON' : 'OFF';
+          })
+          .catch(e => console.error('Options fetch failed:', e));
+      }
+      
+      function updateLogs() {
+        fetch('/plugins/parasite-ai/logs')
+          .then(r => r.json())
+          .then(data => {
+            console.log('Logs data:', data);
+            const logViewer = document.getElementById('logViewer');
+            if (data.error) {
+              console.error('Logs API error:', data.error);
+              logViewer.innerHTML = '<div style="color: #f48771;">Error: ' + data.error + '</div>';
+              return;
+            }
+            if (!data.logs || data.logs.length === 0) {
+              logViewer.innerHTML = '<div style="color: #888;">No logs available</div>';
+              return;
+            }
+            
+            let html = '';
+            data.logs.forEach(log => {
+              let levelColor = '#d4d4d4';
+              if (log.level === 'ERROR') levelColor = '#f48771';
+              else if (log.level === 'WARNING') levelColor = '#dcdcaa';
+              else if (log.level === 'INFO') levelColor = '#4fc1ff';
+              else if (log.level === 'DEBUG') levelColor = '#888';
+              
+              html += '<div class="log-entry">' +
+                '<span class="log-timestamp">' + log.timestamp + '</span>' +
+                '<span class="log-level" style="color: ' + levelColor + ';">[' + log.level + ']</span>' +
+                '<span>' + log.message + '</span>' +
+                '</div>';
+            });
+            logViewer.innerHTML = html;
+            
+            // Auto-scroll to bottom
+            logViewer.scrollTop = logViewer.scrollHeight;
+          })
+          .catch(e => console.error('Logs fetch failed:', e));
+      }
+      
+      function changeAggression(level) {
+        console.log('Aggression change requested:', level);
+        // Note: This would require a webhook endpoint to actually change aggression
+        // For now just notify user
+        alert('Aggression control not yet implemented. Edit config.toml to set aggression level.');
+      }
+      
+      // Initial load
+      console.log('Dashboard loaded, starting data refresh');
+      updateStatus();
+      updateOptions();
+      updateLogs();
+      
+      // Auto-refresh every 2 seconds
+      setInterval(updateStatus, 2000);
+      setInterval(updateOptions, 5000);
+      setInterval(updateLogs, 3000);
+    </script>
+  </body>
+</html>
+"""
 
 
 # -------------------------
@@ -147,7 +389,13 @@ class ParasiteAI(plugins.Plugin):
     def on_webhook(self, path, request):
         """Handle webhook requests for logs and status"""
         try:
-            if path == "/logs":
+            # Normalize path - remove leading/trailing slashes and handle None
+            normalized_path = (path or "").strip("/").lower()
+
+            if not normalized_path or normalized_path == "":
+                # Serve HTML dashboard
+                return render_template_string(HTML_TEMPLATE)
+            elif normalized_path == "logs":
                 # Read logs from file
                 try:
                     if os.path.exists(LOGS_FILE):
@@ -159,7 +407,7 @@ class ParasiteAI(plugins.Plugin):
                     self._log("ERROR", f"Failed to read logs: {e}")
                     logs = []
                 return {"logs": logs}
-            elif path == "/status":
+            elif normalized_path == "status":
                 return {
                     "state": self.state.value,
                     "mood": MOODS[self.current_aggression()],
@@ -168,10 +416,20 @@ class ParasiteAI(plugins.Plugin):
                     "fail": self.memory.get("fail", 0),
                     "consecutive_fails": self.consecutive_fails,
                 }
+            elif normalized_path == "options":
+                # Return current plugin options
+                return {
+                    "min_rssi": self.min_rssi,
+                    "min_clients": self.min_clients,
+                    "max_consecutive_fails": self.max_consecutive_fails,
+                    "save_interval": self.save_interval,
+                    "enable_debug_logs": self.enable_debug_logs,
+                }
+            else:
+                return {"error": f"Unknown path: {path}"}
         except Exception as e:
             self._log("ERROR", f"Webhook error: {e}")
             return {"error": str(e)}
-        return {"error": "Unknown path"}
 
     # -------------------------
     # Logging
@@ -195,7 +453,11 @@ class ParasiteAI(plugins.Plugin):
             self._write_log_to_file(level, message)
 
     def _write_log_to_file(self, level, message):
-        """Append log entry to JSON file"""
+        """Append log entry to JSON file - only log WARNING and ERROR to reduce I/O"""
+        # Skip logging INFO and DEBUG to reduce file I/O
+        if level not in ["ERROR", "WARNING"]:
+            return
+
         try:
             with self._log_file_lock:
                 logs = []
@@ -217,9 +479,9 @@ class ParasiteAI(plugins.Plugin):
                     }
                 )
 
-                # Keep only last 100 logs to prevent file bloat
-                if len(logs) > 100:
-                    logs = logs[-100:]
+                # Keep only last 50 logs to prevent file bloat
+                if len(logs) > 50:
+                    logs = logs[-50:]
 
                 # Write back to file
                 with open(LOGS_FILE, "w") as f:
