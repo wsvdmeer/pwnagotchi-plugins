@@ -1247,18 +1247,21 @@ class BTTetherHelper(Plugin):
                 try:
                     self.agent_process.terminate()
                     self.agent_process.wait(timeout=3)
-                except:
+                except Exception as e:
+                    logging.debug(f"[bt-tether-helper] Agent terminate failed: {e}")
                     try:
                         self.agent_process.kill()
-                    except:
-                        pass
+                    except Exception as kill_err:
+                        logging.debug(
+                            f"[bt-tether-helper] Agent kill failed: {kill_err}"
+                        )
 
             # Close agent log file
             if self.agent_log_fd:
                 try:
                     self.agent_log_fd.close()
-                except:
-                    pass
+                except Exception as e:
+                    logging.debug(f"[bt-tether-helper] Failed to close agent log: {e}")
 
             self._log("INFO", "Plugin unloaded successfully")
         except Exception as e:
@@ -1432,7 +1435,13 @@ class BTTetherHelper(Plugin):
                 if self.show_mini_status:
                     ui.set("bt-status", ">")  # > = Connecting
                 if self.show_detailed_status:
-                    ui.set("bt-detail", "BT:Connecting")
+                    # Show specific status based on self.status
+                    with self.lock:
+                        status_str = self.status
+                    if status_str == "RECONNECTING":
+                        ui.set("bt-detail", "BT:Reconnecting")
+                    else:
+                        ui.set("bt-detail", "BT:Connecting")
                 return
 
             # If no phone_mac is set yet, show disconnected
@@ -1487,8 +1496,8 @@ class BTTetherHelper(Plugin):
                     ui.set("bt-status", "?")
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Error")
-            except:
-                pass
+            except Exception as ui_err:
+                logging.debug(f"[bt-tether-helper] Failed to set error UI: {ui_err}")
 
     def _format_detailed_status(self, status):
         """Format detailed status line for screen display"""
@@ -1505,13 +1514,20 @@ class BTTetherHelper(Plugin):
         pan_active = status.get("pan_active", False)
         ip_address = status.get("ip_address", None)
 
+        # Get status for more specific messaging
+        with self.lock:
+            status_str = self.status
+
         # Build status string
         if disconnecting:
             return "BT:Disconnecting..."
         elif untrusting:
             return "BT:Untrusting..."
         elif connection_in_progress:
-            return "BT:Connecting..."
+            if status_str == "RECONNECTING":
+                return "BT:Reconnecting..."
+            else:
+                return "BT:Connecting..."
         elif pan_active:
             # Connected via PAN - show IP if available, otherwise just "Connected"
             if ip_address:
@@ -1718,6 +1734,10 @@ default-agent
                         self._connection_start_time = time.time()
                         self._screen_needs_refresh = True
 
+                    # Update cached UI to show disconnected immediately before reconnecting
+                    # This ensures the UI shows the transition through the connecting state
+                    self._update_cached_ui_status(status=status, mac=current_mac)
+
                     # Attempt to reconnect to this device
                     success = self._reconnect_device()
 
@@ -1726,13 +1746,13 @@ default-agent
                         self.phone_mac = current_mac
                         self.options["mac"] = self.phone_mac
 
-                # Update last known state
-                self._last_known_connected = status["connected"]
-
                 # Force screen refresh if connection state changed
                 if self._last_known_connected != status["connected"]:
                     with self.lock:
                         self._screen_needs_refresh = True
+
+                # Update last known state (do this AFTER checking for changes)
+                self._last_known_connected = status["connected"]
 
                 # Only try to reconnect if device is BOTH paired AND trusted (and not blocked)
                 # Also check if we haven't exceeded max failures and user didn't manually disconnect
@@ -1757,6 +1777,10 @@ default-agent
                         self._connection_in_progress = True
                         self._connection_start_time = time.time()
                         self._screen_needs_refresh = True
+
+                    # Update cached UI to show disconnected immediately before reconnecting
+                    # This ensures the UI shows the transition through the connecting state
+                    self._update_cached_ui_status(status=status, mac=current_mac)
 
                     success = self._reconnect_device()
 
@@ -2519,10 +2543,10 @@ default-agent
                                 "interface": "bnep0",
                                 "ip_address": ip_address,
                             }
-                    except:
-                        pass
-            except:
-                pass
+                    except Exception as ip_err:
+                        logging.debug(f"[bt-tether-helper] IP check failed: {ip_err}")
+            except Exception as bnep_err:
+                logging.debug(f"[bt-tether-helper] bnep check failed: {bnep_err}")
 
             # Quick bluetoothctl check with minimal timeout
             try:
@@ -2547,8 +2571,8 @@ default-agent
                         "interface": None,
                         "ip_address": None,
                     }
-            except:
-                pass
+            except Exception as bt_err:
+                logging.debug(f"[bt-tether-helper] bluetoothctl check failed: {bt_err}")
 
             # Fallback to disconnected if all checks fail
             return {
@@ -3115,7 +3139,8 @@ default-agent
                 text=True,
             )
             return result.returncode == 0
-        except:
+        except Exception as e:
+            logging.debug(f"[bt-tether-helper] Bluetooth responsive check failed: {e}")
             return False
 
     def _restart_bluetooth_if_needed(self):
@@ -3568,8 +3593,10 @@ default-agent
                 with open("/etc/resolv.conf", "r") as f:
                     dns_config = f.read()
                     logging.debug(f"[bt-tether-helper] DNS config:\n{dns_config}")
-            except:
-                pass
+            except Exception as dns_err:
+                logging.debug(
+                    f"[bt-tether-helper] Failed to read DNS config: {dns_err}"
+                )
 
         except Exception as e:
             logging.error(f"[bt-tether-helper] Failed to log network config: {e}")
@@ -4099,8 +4126,8 @@ default-agent
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-            except:
-                pass
+            except Exception as scan_err:
+                logging.debug(f"[bt-tether-helper] Failed to start scan: {scan_err}")
 
             # Wait up to 60 seconds for device to be discovered
             device_found = False
@@ -4122,8 +4149,8 @@ default-agent
                     stderr=subprocess.DEVNULL,
                 )
                 time.sleep(0.5)
-            except:
-                pass
+            except Exception as scan_err:
+                logging.debug(f"[bt-tether-helper] Failed to stop scan: {scan_err}")
 
             if not device_found:
                 logging.error(f"[bt-tether-helper] Device {mac} not found after scan!")
@@ -4422,10 +4449,9 @@ default-agent
     def _connect_nap_dbus(self, mac):
         """Connect to NAP service using DBus directly"""
         try:
-            logging.info("[bt-tether-helper] Importing dbus module...")
-            import dbus
-
-            logging.info("[bt-tether-helper] dbus module imported successfully")
+            if not DBUS_AVAILABLE:
+                logging.error("[bt-tether-helper] dbus module not available")
+                return False
 
             logging.info("[bt-tether-helper] Connecting to system bus...")
             bus = dbus.SystemBus()
@@ -4481,6 +4507,9 @@ default-agent
                     "br-connection-page-timeout" in error_msg
                     or "br-connection-unknown" in error_msg
                     or "Host is down" in error_msg
+                    or "Authentication Rejected" in error_msg
+                    or "Connection refused" in error_msg
+                    or "org.bluez.Error.Failed" in error_msg
                 ):
                     self._log(
                         "WARNING",
@@ -4493,6 +4522,10 @@ default-agent
                             "INFO",
                             "Removed stale pairing - use web UI to re-pair if needed",
                         )
+                        # Also clear the phone_mac to force re-scanning
+                        with self.lock:
+                            self.phone_mac = ""
+                            self.options["mac"] = ""
                     except Exception as e:
                         logging.debug(f"Failed to remove pairing: {e}")
 
