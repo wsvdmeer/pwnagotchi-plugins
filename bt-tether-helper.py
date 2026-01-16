@@ -948,7 +948,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.1.1"
+    __version__ = "1.2.0"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1727,7 +1727,7 @@ default-agent
                         )
                         self._monitor_paused.set()
                     # Silently recheck every 60s when paused (no logging)
-                    
+
                     # Sleep and then recheck for devices (don't wait indefinitely)
                     time.sleep(self.reconnect_interval)
                     # Don't clear pause flag yet - keep it set until we find a device
