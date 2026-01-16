@@ -593,6 +593,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       async function pairAndConnectDevice(mac, name) {
         showFeedback(`Starting pairing with ${name}... Watch for pairing dialog!`, "info");
         
+        // Hide scan card immediately when pairing starts
+        const scanCard = document.getElementById('scanCard');
+        if (scanCard) {
+          scanCard.style.display = 'none';
+        }
+        
         // Show connecting state on the connect button immediately
         const connectBtn = document.getElementById('quickConnectBtn');
         connectBtn.style.display = 'block';
@@ -608,12 +614,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             
             // Update MAC input field with the paired device
             macInput.value = mac;
-            
-            // Hide scan results since we're now pairing/connecting
-            const scanResults = document.getElementById('scanResults');
-            if (scanResults) {
-              scanResults.style.display = 'none';
-            }
             
             // Scroll to the connection status card
             const phoneConnectionCard = document.getElementById('phoneConnectionCard');
@@ -955,7 +955,10 @@ class BTTetherHelper(Plugin):
     # Timing constants
     BLUETOOTH_SERVICE_STARTUP_DELAY = 3
     MONITOR_INITIAL_DELAY = 5
+    MONITOR_PAUSED_CHECK_INTERVAL = 10  # Check every 10 seconds when paused
     SCAN_DURATION = 30
+    SCAN_DISCOVERY_WAIT = 1  # Wait between scan discovery attempts
+    SCAN_DISCOVERY_MAX_ATTEMPTS = 60  # Max attempts to discover device during scan
     DEVICE_OPERATION_DELAY = 1
     DEVICE_OPERATION_LONGER_DELAY = 2
     SCAN_STOP_DELAY = 0.5
@@ -967,6 +970,8 @@ class BTTetherHelper(Plugin):
     FALLBACK_INIT_TIMEOUT = 15  # Seconds to wait for on_ready() before fallback init
     PAN_INTERFACE_WAIT = 2  # Seconds to wait for PAN interface after connection
     INTERNET_VERIFY_WAIT = 2  # Seconds to wait before verifying internet connectivity
+    DHCP_KILL_WAIT = 0.5  # Wait after killing dhclient
+    DHCP_RELEASE_WAIT = 1  # Wait after releasing DHCP lease
 
     # Reconnect configuration constants
     DEFAULT_RECONNECT_INTERVAL = 60  # Default seconds between reconnect checks
@@ -1247,21 +1252,37 @@ class BTTetherHelper(Plugin):
                 try:
                     self.agent_process.terminate()
                     self.agent_process.wait(timeout=3)
-                except Exception as e:
-                    logging.debug(f"[bt-tether-helper] Agent terminate failed: {e}")
+                except subprocess.TimeoutExpired:
+                    logging.warning(
+                        "[bt-tether-helper] Agent didn't terminate, killing..."
+                    )
                     try:
                         self.agent_process.kill()
+                        self.agent_process.wait(timeout=1)
                     except Exception as kill_err:
-                        logging.debug(
+                        logging.error(
                             f"[bt-tether-helper] Agent kill failed: {kill_err}"
                         )
+                except Exception as e:
+                    logging.debug(f"[bt-tether-helper] Agent terminate failed: {e}")
 
             # Close agent log file
             if self.agent_log_fd:
                 try:
-                    self.agent_log_fd.close()
+                    if isinstance(self.agent_log_fd, int):
+                        os.close(self.agent_log_fd)
+                    else:
+                        self.agent_log_fd.close()
+                    self.agent_log_fd = None
                 except Exception as e:
                     logging.debug(f"[bt-tether-helper] Failed to close agent log: {e}")
+
+            # Clean up log file
+            if self.agent_log_path and os.path.exists(self.agent_log_path):
+                try:
+                    os.remove(self.agent_log_path)
+                except Exception as e:
+                    logging.debug(f"[bt-tether-helper] Failed to remove agent log: {e}")
 
             self._log("INFO", "Plugin unloaded successfully")
         except Exception as e:
@@ -1386,6 +1407,9 @@ class BTTetherHelper(Plugin):
                         self._connection_start_time = None
                         self.status = "ERROR"
                         self.message = "Connection timeout - operation took too long"
+                        self._screen_needs_refresh = True
+                    # Update cached UI to show error
+                    self._update_cached_ui_status()
                     connection_in_progress = False
 
             if disconnecting and disconnect_start_time:
@@ -1628,9 +1652,21 @@ default-agent
             logging.info(
                 f"[bt-tether-helper] 🔑 Passkeys will appear in: {self.agent_log_path}"
             )
-
         except Exception as e:
             logging.error(f"[bt-tether-helper] Failed to start pairing agent: {e}")
+            # Clean up on failure
+            if self.agent_log_fd:
+                try:
+                    os.close(self.agent_log_fd)
+                except:
+                    pass
+                self.agent_log_fd = None
+            if self.agent_log_path and os.path.exists(self.agent_log_path):
+                try:
+                    os.remove(self.agent_log_path)
+                except:
+                    pass
+                self.agent_log_path = None
 
     def _start_monitoring_thread(self):
         """Start background thread to monitor connection and auto-reconnect if dropped"""
@@ -1684,21 +1720,28 @@ default-agent
                 best_device = self._find_best_device_to_connect(log_results=False)
 
                 if not best_device:
-                    # No suitable devices - pause monitoring until we have a device
-                    self._log("INFO", "No trusted devices to monitor. Monitor paused.")
-                    self._monitor_paused.set()
-                    # Wait indefinitely until either:
-                    # 1. Monitor is stopped (_monitor_stop is set)
-                    # 2. Monitor is unpaused (_monitor_paused is cleared)
-                    while (
-                        not self._monitor_stop.is_set()
-                        and self._monitor_paused.is_set()
-                    ):
-                        time.sleep(10)  # Check every 10 seconds
+                    # No suitable devices - pause monitoring but periodically recheck
+                    if not self._monitor_paused.is_set():
+                        self._log(
+                            "INFO", "No trusted devices to monitor. Monitor paused."
+                        )
+                        self._monitor_paused.set()
+                    # Silently recheck every 60s when paused (no logging)
+                    
+                    # Sleep and then recheck for devices (don't wait indefinitely)
+                    time.sleep(self.reconnect_interval)
+                    # Don't clear pause flag yet - keep it set until we find a device
                     continue
 
                 current_mac = best_device["mac"]
                 device_name = best_device["name"]
+
+                # Clear paused flag since we found a device
+                if self._monitor_paused.is_set():
+                    self._monitor_paused.clear()
+                    logging.info(
+                        f"[bt-tether-helper] Monitor resumed - found device: {device_name}"
+                    )
 
                 # Check current connection status for this device
                 status = self._get_full_connection_status(current_mac)
@@ -1725,6 +1768,27 @@ default-agent
                     logging.warning(
                         f"[bt-tether-helper] Connection to {device_name} dropped! Attempting to reconnect..."
                     )
+
+                    # First show DISCONNECTED status on screen
+                    with self.lock:
+                        self.status = "DISCONNECTED"
+                        self.message = f"Connection to {device_name} dropped"
+                        self._screen_needs_refresh = True
+
+                    # Force cached UI to show disconnected (clear any lingering IP/interface)
+                    self._update_cached_ui_status(
+                        status={
+                            "paired": True,
+                            "trusted": True,
+                            "connected": False,
+                            "pan_active": False,
+                            "interface": None,
+                            "ip_address": None,
+                        },
+                        mac=current_mac,
+                    )
+
+                    # Now set to RECONNECTING and attempt to reconnect
                     with self.lock:
                         self.status = "RECONNECTING"
                         self.message = (
@@ -1732,11 +1796,10 @@ default-agent
                         )
                         self._connection_in_progress = True
                         self._connection_start_time = time.time()
+                        self._initializing = (
+                            False  # Ensure initializing flag is cleared
+                        )
                         self._screen_needs_refresh = True
-
-                    # Update cached UI to show disconnected immediately before reconnecting
-                    # This ensures the UI shows the transition through the connecting state
-                    self._update_cached_ui_status(status=status, mac=current_mac)
 
                     # Attempt to reconnect to this device
                     success = self._reconnect_device()
@@ -1776,6 +1839,9 @@ default-agent
                         self.message = f"Reconnecting to {device_name}..."
                         self._connection_in_progress = True
                         self._connection_start_time = time.time()
+                        self._initializing = (
+                            False  # Ensure initializing flag is cleared
+                        )
                         self._screen_needs_refresh = True
 
                     # Update cached UI to show disconnected immediately before reconnecting
@@ -1797,6 +1863,8 @@ default-agent
                         # Track when failures started
                         if self._first_failure_time is None:
                             self._first_failure_time = time.time()
+                        # Update cached UI to show disconnected state after failure
+                        self._update_cached_ui_status(mac=current_mac)
                         if (
                             self._reconnect_failure_count
                             >= self._max_reconnect_failures
@@ -1812,6 +1880,9 @@ default-agent
                             with self.lock:
                                 self.status = "DISCONNECTED"
                                 self.message = f"Auto-reconnect paused - retrying in {self._reconnect_failure_cooldown}s"
+                                self._connection_in_progress = (
+                                    False  # Clear flag to show proper status
+                                )
                                 self._screen_needs_refresh = True
                 elif self._reconnect_failure_count >= self._max_reconnect_failures:
                     # Already exceeded max failures - check if cooldown period has elapsed
@@ -1864,6 +1935,9 @@ default-agent
                 self._connection_start_time = (
                     time.time()
                 )  # Track start time for timeout detection
+                self._initializing = (
+                    False  # Ensure initializing flag is cleared during reconnection
+                )
 
             self._log("INFO", f"Reconnecting to {mac}...")
 
@@ -1939,6 +2013,9 @@ default-agent
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"✓ Reconnected! Internet via {iface}"
+                            self._connection_in_progress = (
+                                False  # Clear flag before UI update
+                            )
                             self._screen_needs_refresh = True
                         # Update cached UI status
                         self._update_cached_ui_status(mac=mac)
@@ -1950,6 +2027,9 @@ default-agent
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"Reconnected via {iface} but no internet"
+                            self._connection_in_progress = (
+                                False  # Clear flag before UI update
+                            )
                             self._screen_needs_refresh = True
                         # Update cached UI status
                         self._update_cached_ui_status(mac=mac)
@@ -1961,6 +2041,10 @@ default-agent
                     with self.lock:
                         self.status = "CONNECTED"
                         self.message = "Reconnected but no PAN interface"
+                        self._connection_in_progress = (
+                            False  # Clear flag before UI update
+                        )
+                        self._initializing = False  # Clear initializing flag
                         self._screen_needs_refresh = True
                     # Update cached UI status
                     self._update_cached_ui_status(mac=mac)
@@ -1968,21 +2052,51 @@ default-agent
             else:
                 logging.warning(f"[bt-tether-helper] Reconnection failed")
                 with self.lock:
-                    self.status = "ERROR"
+                    self.status = "DISCONNECTED"
                     self.message = "Reconnection failed. Will retry later."
-                # Update cached UI status
-                self._update_cached_ui_status(mac=mac)
+                    self._connection_in_progress = False  # Clear flag immediately
+                    self._initializing = False  # Clear initializing flag
+                    self._screen_needs_refresh = True
+                # Force cached UI to show disconnected (clear any lingering IP/interface)
+                self._update_cached_ui_status(
+                    status={
+                        "paired": True,
+                        "trusted": True,
+                        "connected": False,
+                        "pan_active": False,
+                        "interface": None,
+                        "ip_address": None,
+                    },
+                    mac=mac,
+                )
                 return False
 
         except Exception as e:
             logging.error(f"[bt-tether-helper] Reconnection error: {e}")
             with self.lock:
-                self.status = "ERROR"
+                self.status = "DISCONNECTED"
                 self.message = f"Reconnection error: {str(e)[:50]}"
+                self._connection_in_progress = False  # Clear flag immediately
+                self._initializing = False  # Clear initializing flag
+                self._screen_needs_refresh = True
+            # Force cached UI to show disconnected (clear any lingering IP/interface)
+            self._update_cached_ui_status(
+                status={
+                    "paired": True,
+                    "trusted": True,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                    "ip_address": None,
+                },
+                mac=mac,
+            )
             return False
         finally:
+            # Ensure flag is cleared
             with self.lock:
-                self._connection_in_progress = False
+                if self._connection_in_progress:
+                    self._connection_in_progress = False
 
     def _monitor_agent_log_for_passkey(self, passkey_found_event):
         """Monitor agent log file for passkey display in real-time and auto-confirm"""
@@ -2315,6 +2429,23 @@ default-agent
                 )  # Track start time for timeout detection
                 self._disconnecting = True  # Set disconnecting flag for UI
                 self._disconnect_start_time = time.time()  # Track disconnect start time
+                self._initializing = False  # Clear initializing flag
+                self._screen_needs_refresh = (
+                    True  # Force screen update to show disconnecting
+                )
+
+            # Update cached UI to show disconnecting state immediately
+            self._update_cached_ui_status(
+                status={
+                    "paired": True,
+                    "trusted": True,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                    "ip_address": None,
+                },
+                mac=mac,
+            )
 
             # Wait briefly for any ongoing reconnect to complete
             time.sleep(0.5)
@@ -2367,6 +2498,22 @@ default-agent
                 self._disconnect_start_time = None
                 self._untrusting = True  # Show untrusting state
                 self._untrust_start_time = time.time()  # Track when untrust started
+                self._screen_needs_refresh = (
+                    True  # Force screen update to show untrusting
+                )
+
+            # Update cached UI to show untrusting state
+            self._update_cached_ui_status(
+                status={
+                    "paired": True,
+                    "trusted": False,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                    "ip_address": None,
+                },
+                mac=mac,
+            )
 
             trust_result = self._run_cmd(["bluetoothctl", "untrust", mac], capture=True)
             self._log("INFO", f"Untrust result: {trust_result}")
@@ -2424,6 +2571,12 @@ default-agent
             }
         except Exception as e:
             self._log("ERROR", f"Disconnect error: {e}")
+            with self.lock:
+                self.status = "ERROR"
+                self.message = f"Disconnect failed: {str(e)[:50]}"
+                self._initializing = False  # Clear initializing flag
+                self._screen_needs_refresh = True
+            self._update_cached_ui_status()
             return {"success": False, "message": f"Disconnect failed: {str(e)}"}
         finally:
             # Always clear the flags, even if disconnect fails
@@ -2462,6 +2615,10 @@ default-agent
                     self._last_known_connected = False
                     # Clear passkey after unpair
                     self.current_passkey = None
+                    self._screen_needs_refresh = True
+
+                # Update cached UI status
+                self._update_cached_ui_status()
 
                 return {
                     "success": True,
@@ -2698,12 +2855,8 @@ default-agent
                 return device
 
             # No devices found
-            # Only warn if we're not in a disconnected/disconnecting state
-            if self.status not in [
-                "DISCONNECTED",
-                "DISCONNECTING",
-                "UNTRUSTING",
-            ]:
+            # Only warn if explicitly requested to log results
+            if log_results:
                 self._log(
                     "WARNING",
                     "No trusted devices with tethering capability found",
@@ -2721,13 +2874,14 @@ default-agent
 
             # Power on bluetooth
             self._run_cmd(["bluetoothctl", "power", "on"], capture=True)
-            time.sleep(1)
+            time.sleep(self.DEVICE_OPERATION_DELAY)
 
             # Start scanning
             self._log("INFO", "Starting scan...")
             # Use subprocess directly to prevent [CHG] messages in logs
+            scan_process = None
             try:
-                subprocess.Popen(
+                scan_process = subprocess.Popen(
                     ["bluetoothctl", "scan", "on"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -2743,14 +2897,30 @@ default-agent
 
             # Stop scanning
             try:
-                subprocess.Popen(
+                stop_process = subprocess.Popen(
                     ["bluetoothctl", "scan", "off"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
+                stop_process.wait(timeout=2)
                 time.sleep(self.SCAN_STOP_DELAY)
+            except subprocess.TimeoutExpired:
+                logging.debug("[bt-tether-helper] Scan stop timed out")
+                if "stop_process" in locals():
+                    stop_process.kill()
             except Exception as e:
-                self._log("DEBUG", f"Failed to stop scan: {e}")
+                logging.error(f"[bt-tether-helper] Failed to stop scan: {e}")
+            finally:
+                # Clean up scan process if it exists
+                if scan_process:
+                    try:
+                        if scan_process.poll() is None:
+                            scan_process.terminate()
+                            scan_process.wait(timeout=1)
+                    except Exception as e:
+                        logging.debug(
+                            f"[bt-tether-helper] Failed to clean up scan process: {e}"
+                        )
 
             devices = []
             if devices_output:
@@ -2780,6 +2950,7 @@ default-agent
             if not best_device:
                 self.status = "ERROR"
                 self.message = "No trusted devices found - scan and pair a device first"
+                self._screen_needs_refresh = True
                 return
 
             # Update current target MAC
@@ -2793,6 +2964,7 @@ default-agent
                     "Connection already in progress, ignoring duplicate request",
                 )
                 self.message = "Connection already in progress"
+                self._screen_needs_refresh = True
                 return
 
             if self.status in ["PAIRING", "CONNECTING"]:
@@ -2800,6 +2972,7 @@ default-agent
                     "WARNING", "Already pairing/connecting, ignoring duplicate request"
                 )
                 self.message = "Connection already in progress"
+                self._screen_needs_refresh = True
                 return
 
             # Set flag INSIDE the lock to prevent race condition
@@ -2841,6 +3014,7 @@ default-agent
             self._log("INFO", f"Making Pwnagotchi discoverable...")
             with self.lock:
                 self.message = f"Making Pwnagotchi discoverable for {device_name}..."
+                self._screen_needs_refresh = True
             self._run_cmd(["bluetoothctl", "discoverable", "on"], capture=True)
             self._run_cmd(["bluetoothctl", "pairable", "on"], capture=True)
             time.sleep(self.DEVICE_OPERATION_LONGER_DELAY)
@@ -2851,18 +3025,21 @@ default-agent
                 self._log("INFO", "Removing device for fresh pairing...")
                 with self.lock:
                     self.message = f"Preparing to pair with {device_name}..."
+                    self._screen_needs_refresh = True
                 self._run_cmd(["bluetoothctl", "remove", mac], capture=True)
                 time.sleep(self.DEVICE_OPERATION_DELAY)
 
                 self._log("INFO", f"Unblocking {device_name} in case it was blocked...")
                 with self.lock:
                     self.message = f"Unblocking {device_name}..."
+                    self._screen_needs_refresh = True
                 self._run_cmd(["bluetoothctl", "unblock", mac], capture=True)
                 time.sleep(self.DEVICE_OPERATION_DELAY)
 
                 # Check if already paired
                 with self.lock:
                     self.message = f"Checking pairing status with {device_name}..."
+                    self._screen_needs_refresh = True
                 pair_status = self._check_pair_status(mac)
 
                 if not pair_status["paired"]:
@@ -2890,17 +3067,20 @@ default-agent
                     self._log("INFO", f"Device {device_name} already paired")
                     with self.lock:
                         self.message = f"Device {device_name} already paired ✓"
+                        self._screen_needs_refresh = True
 
             # Trust the device
             logging.info(f"[bt-tether-helper] Trusting device {device_name}...")
             with self.lock:
                 self.message = f"Setting {device_name} as trusted..."
+                self._screen_needs_refresh = True
             self._run_cmd(["bluetoothctl", "trust", mac])
 
             # Wait for phone to be ready after pairing/trust
             logging.info(f"[bt-tether-helper] Waiting for {device_name} to be ready...")
             with self.lock:
                 self.message = f"Waiting for {device_name} to be ready..."
+                self._screen_needs_refresh = True
             time.sleep(3)  # Brief wait for phone to be ready
 
             # Proceed directly to NAP connection (this establishes BT connection if needed)
@@ -2908,12 +3088,14 @@ default-agent
             with self.lock:
                 self.status = "CONNECTING"
                 self.message = "Connecting to NAP profile for internet..."
+                self._screen_needs_refresh = True
 
             # Try to establish PAN connection
             self._log("INFO", "Establishing PAN connection...")
             with self.lock:
                 self.status = "CONNECTING"
                 self.message = "Connecting to NAP profile for internet..."
+                self._screen_needs_refresh = True
 
             # Try DBus connection to NAP profile (with retry for br-connection-busy)
             nap_connected = False
@@ -2987,6 +3169,7 @@ default-agent
                     self._log("INFO", "Checking internet connectivity...")
                     with self.lock:
                         self.message = "Verifying internet connection..."
+                        self._screen_needs_refresh = True
 
                     if self._check_internet_connectivity():
                         self._log("INFO", "✓ Internet connectivity verified!")
@@ -3096,6 +3279,9 @@ default-agent
                 self.message = f"Connection error: {str(e)}"
                 self._connection_in_progress = False
                 self._connection_start_time = None
+                self._screen_needs_refresh = True
+            # Update cached UI status to show error
+            self._update_cached_ui_status()
         finally:
             # Clear the flag if not already cleared (error cases)
             # Invalidate cache first to ensure fresh status on next UI update
@@ -3278,7 +3464,7 @@ default-agent
                     stderr=subprocess.DEVNULL,
                     timeout=5,
                 )
-                time.sleep(1)
+                time.sleep(self.DHCP_RELEASE_WAIT)
                 # Request new lease
                 result = subprocess.run(
                     ["sudo", "dhcpcd", "-4", "-n", iface],
@@ -3303,7 +3489,7 @@ default-agent
                     stderr=subprocess.DEVNULL,
                     timeout=3,
                 )
-                time.sleep(0.5)
+                time.sleep(self.DHCP_KILL_WAIT)
 
                 # Request new lease with better error handling
                 try:
@@ -4120,8 +4306,9 @@ default-agent
 
             # Scan for device first so bluetoothctl knows about it
             logging.info(f"[bt-tether-helper] Scanning for device {mac}...")
+            scan_process = None  # Initialize to prevent undefined reference
             try:
-                subprocess.Popen(
+                scan_process = subprocess.Popen(
                     ["bluetoothctl", "scan", "on"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -4143,14 +4330,31 @@ default-agent
 
             # Stop scan
             try:
-                subprocess.Popen(
+                stop_process = subprocess.Popen(
                     ["bluetoothctl", "scan", "off"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                time.sleep(0.5)
+                stop_process.wait(timeout=2)  # Wait for scan to stop
+                time.sleep(self.SCAN_STOP_DELAY)
+            except subprocess.TimeoutExpired:
+                logging.debug("[bt-tether-helper] Scan stop timed out")
+                if stop_process:
+                    stop_process.kill()
             except Exception as scan_err:
                 logging.debug(f"[bt-tether-helper] Failed to stop scan: {scan_err}")
+            finally:
+                # Clean up scan process if it exists
+                if scan_process:
+                    try:
+                        scan_process.poll()
+                        if scan_process.returncode is None:
+                            scan_process.terminate()
+                            scan_process.wait(timeout=1)
+                    except Exception as e:
+                        logging.debug(
+                            f"[bt-tether-helper] Failed to clean up scan process: {e}"
+                        )
 
             if not device_found:
                 logging.error(f"[bt-tether-helper] Device {mac} not found after scan!")
@@ -4503,13 +4707,13 @@ default-agent
                 )
 
                 # Check for authentication/pairing errors - if phone was unpaired, remove pairing on Pwnagotchi side too
+                # BUT: Don't remove for tethering-disabled errors (br-connection-create-socket, br-connection-profile-unavailable)
                 if (
-                    "br-connection-page-timeout" in error_msg
+                    "Authentication Rejected" in error_msg
+                    or "Connection refused" in error_msg
+                    or "br-connection-page-timeout" in error_msg
                     or "br-connection-unknown" in error_msg
                     or "Host is down" in error_msg
-                    or "Authentication Rejected" in error_msg
-                    or "Connection refused" in error_msg
-                    or "org.bluez.Error.Failed" in error_msg
                 ):
                     self._log(
                         "WARNING",
