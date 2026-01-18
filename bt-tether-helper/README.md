@@ -1,12 +1,14 @@
 # bt-tether-helper
 
 > **🚧 Work in Progress:** This plugin is currently under active development. Features and functionality may change.
->
+
 > **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
 >
 > **⚠️ Warning:** Do not enable both this plugin and the default bt-tether.py at the same time. Only one Bluetooth tethering plugin should be active to avoid conflicts.
+
+> **✅ Important:** This plugin has been tested on **Android 15** and **iOS 26.1** (both support MAC address randomization) with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
 >
-> **✅ Important:** This plugin has been tested on an **Android 15** and **iOS 26.1** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
+> **🆕 No manual MAC configuration required!** The web UI can scan, pair, and manage devices automatically. MAC randomization is handled for both iOS and Android. Manual MAC entry is not needed for normal use.
 
 A comprehensive Bluetooth tethering plugin that provides guided setup and automatic connection management for sharing your phone's internet connection with your Pwnagotchi.
 
@@ -24,43 +26,43 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 
 ## Features
 
-- **Web Interface**: User-friendly web UI for managing Bluetooth connections
-- **Automatic Pairing**: Interactive pairing with passkey display and confirmation
+- **Web Interface**: User-friendly web UI for scanning, pairing, and managing Bluetooth connections
+- **Automatic Pairing & Discovery**: Scan and pair with your phone directly from the web UI—no need to manually enter MAC addresses (works with iOS randomized MACs)
+- **Auto-Discovery of Trusted Devices**: Finds and manages trusted devices with tethering capability
 - **Connection Management**: Connect and disconnect devices with one click
 - **Auto-Reconnect**: Automatically detects and reconnects dropped connections
-- **Device Scanning**: Scan for nearby Bluetooth devices to find and copy MAC addresses
 - **Status Display**: Real-time connection status on Pwnagotchi screen
 - **PAN (Personal Area Network) Support**: Automatic network interface configuration
 - **Discord Notifications**: Optional webhook notifications when connected with IP address
 
 ## Installation
 
-1. Copy `bt-tether-helper.py` to your Pwnagotchi's custom plugins directory:
+1. **Dependencies:**
+   - If you are running stock Pwnagotchi, all required dependencies are already installed.
+   - If you are building your own image or using a minimal OS, install these packages:
+
+     ```bash
+     sudo apt-get update
+     sudo apt-get install -y bluez network-manager python3-dbus python3-toml
+     ```
+
+2. **Enable required services:**
+
+   ```bash
+   sudo systemctl enable bluetooth && sudo systemctl start bluetooth
+   sudo systemctl enable NetworkManager && sudo systemctl start NetworkManager
+   ```
+
+3. **Copy `bt-tether-helper.py` to your Pwnagotchi's custom plugins directory:**
 
    ```bash
    sudo cp bt-tether-helper.py /usr/local/share/pwnagotchi/custom-plugins/
    ```
 
-2. Find your phone's MAC address:
-
-   - Use the web interface scan function (see Usage section below), or
-   - Check in Android: Settings → About Phone → Status → Bluetooth address
-
-3. Add your phone's MAC address to `/etc/pwnagotchi/config.toml`:
-
-   ```toml
-   main.plugins.bt-tether-helper.enabled = true
-   main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"
-   ```
-
-   > See [Configuration Options](#configuration-options) for additional settings (display, auto-reconnect, etc.)
-
-4. Restart Pwnagotchi:
+4. **Restart Pwnagotchi:**
    ```bash
    pwnkill
    ```
-
-> **Note:** All required dependencies (`dbus-python`, `toml`, `bluez`) are already included in Pwnagotchi - no additional packages needed!
 
 ## Usage
 
@@ -70,9 +72,9 @@ Access the web interface at: `http://<pwnagotchi-ip>:8080/plugins/bt-tether-help
 
 **Features:**
 
-- **Connect to Phone**: Initiate connection to your configured device
-- **Disconnect**: Safely disconnect from paired device (automatically unpairs)
-- **Scan**: Discover nearby Bluetooth devices
+- **Scan & Pair**: Discover and pair with nearby Bluetooth devices (no manual MAC entry needed)
+- **Connect to Phone**: Initiate connection to your paired device
+- **Disconnect**: Safely disconnect from paired device (optionally unpair)
 - **Status**: Real-time connection and internet status
 - **Internet Test**: Test connectivity with detailed diagnostics (ping, DNS, IP, routing)
 - **Active Route Display**: Shows which network interface is handling internet traffic
@@ -101,16 +103,14 @@ This is especially useful for troubleshooting when you have multiple network int
 
 ### Connection Process
 
-1. **Enable Bluetooth Tethering on Your Android Phone:**
+1. **Enable Bluetooth Tethering on Your Phone:**
 
    Go to: Settings → Network & internet → Hotspot & tethering → Bluetooth tethering (Enable it)
 
    > **Note:** Bluetooth tethering **must be enabled** before attempting to connect.
 
 2. **Pairing (First Time Only):**
-
-   - Make sure your phone's MAC address is configured in `/etc/pwnagotchi/config.toml` (see Installation)
-   - Click "Connect to Phone" in the web interface
+   - Use the web interface to scan for your phone and initiate pairing (no need to manually enter MAC address)
    - A pairing dialog will appear on your phone
    - Verify the passkey matches on both devices
    - Tap "Pair" on your phone
@@ -143,7 +143,6 @@ Both displays update in real-time based on connection state.
 ```toml
 # Core Settings
 main.plugins.bt-tether-helper.enabled = true  # Enable the plugin
-main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC address
 
 # Display Settings
 main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: enable/disable all on-screen display (default: true)
@@ -288,7 +287,6 @@ The plugin uses multiple layers to detect when a device disconnects:
    ```
 
    Parses output for:
-
    - `Connected: yes/no` - Bluetooth connection status
    - `Paired: yes/no` - Pairing status
    - `Trusted: yes/no` - Trust/auto-connect status
@@ -311,10 +309,15 @@ When you click "Disconnect" in the web interface:
 
 1. **Disconnect initiated** - Sets `_user_requested_disconnect = True`
 2. **NAP disconnect** - Closes Bluetooth network connection
-3. **Block device** - Prevents automatic reconnection
-4. **Optional: Unpair** - If "Also unpair device" is checked, removes pairing (requires passkey on next connection)
+3. **Block device** - Prevents automatic reconnection (device remains paired, but auto-reconnect is disabled until you manually reconnect)
+4. **Optional: Unpair** - If "Also unpair device" is checked, removes pairing (requires passkey on next connection; device is fully removed from trusted list)
 5. **Status: DISCONNECTED** - Monitor won't attempt auto-reconnect
 6. **Interface cleanup** - bnep interface removed
+
+**Unpair vs Block:**
+
+- **Block**: Prevents auto-reconnect, but device remains paired and can be manually reconnected later.
+- **Unpair**: Removes the device pairing entirely; next connection will require a new pairing process.
 
 To reconnect after manual disconnect, use the web interface "Connect" button.
 
@@ -378,37 +381,21 @@ When your device connects, you'll receive a notification with the IP address and
 
 ## Advanced
 
-### Finding Your Phone's MAC Address
+### MAC Addresses and Randomization
 
-**Android:**
-
-```
-Settings → About Phone → Status → Bluetooth address
-```
-
-**iOS:**
-
-```
-Settings → General → About → Bluetooth
-```
-
-**Via Terminal:**
-
-```bash
-bluetoothctl devices
-```
+You do **not** need to find or enter your phone's MAC address manually. The web interface can scan and pair automatically, and the plugin handles MAC randomization for both iOS and Android.
 
 ## API Endpoints
 
-The plugin provides REST API endpoints for external control:
+The plugin provides REST API endpoints for external control. The web interface is the recommended way to manage devices, and MAC addresses are not required for normal use. For advanced/manual API usage, device selection is handled by the plugin and MACs are managed internally:
 
 - `GET /plugins/bt-tether-helper` - Web interface
-- `POST /plugins/bt-tether-helper/connect?mac=XX:XX:XX:XX:XX:XX` - Initiate connection
-- `POST /plugins/bt-tether-helper/disconnect?mac=XX:XX:XX:XX:XX:XX` - Disconnect device
-- `POST /plugins/bt-tether-helper/unpair?mac=XX:XX:XX:XX:XX:XX` - Unpair device
+- `POST /plugins/bt-tether-helper/connect` - Initiate connection (device selection handled by plugin)
+- `POST /plugins/bt-tether-helper/disconnect` - Disconnect device
+- `POST /plugins/bt-tether-helper/unpair` - Unpair device
 - `GET /plugins/bt-tether-helper/status` - Get current status
-- `GET /plugins/bt-tether-helper/pair-status?mac=XX:XX:XX:XX:XX:XX` - Check pairing status
-- `GET /plugins/bt-tether-helper/connection-status?mac=XX:XX:XX:XX:XX:XX` - Full connection details
+- `GET /plugins/bt-tether-helper/pair-status` - Check pairing status
+- `GET /plugins/bt-tether-helper/connection-status` - Full connection details
 - `GET /plugins/bt-tether-helper/scan` - Scan for devices (30 seconds)
 - `GET /plugins/bt-tether-helper/test-internet` - Test internet connectivity with detailed diagnostics
 
