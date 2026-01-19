@@ -3869,6 +3869,71 @@ default-agent
             self._log("ERROR", f"Network setup error: {e}")
             return False
 
+    def _kill_dhclient_for_interface(self, iface):
+        """Kill dhclient processes specifically managing the given interface.
+        
+        Uses PID-based targeting to avoid killing dhclient processes for other interfaces.
+        Only kills processes where the interface appears as a separate argument.
+        """
+        try:
+            # Get all dhclient PIDs
+            result = subprocess.run(
+                ["pidof", "dhclient"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=3,
+            )
+            
+            if result.returncode != 0 or not result.stdout.strip():
+                # No dhclient processes running
+                return
+            
+            pids = result.stdout.strip().split()
+            killed_any = False
+            
+            for pid in pids:
+                try:
+                    # Get command line for this PID
+                    ps_result = subprocess.run(
+                        ["ps", "-p", pid, "-o", "args="],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=2,
+                    )
+                    
+                    if ps_result.returncode != 0:
+                        continue
+                    
+                    cmdline = ps_result.stdout.strip()
+                    
+                    # Check if this dhclient is managing our interface
+                    # Match patterns like "dhclient bnep0", "dhclient -v bnep0", "dhclient -4 -v bnep0"
+                    # The interface must appear as a separate argument (with space before it or at end)
+                    # Split command line into arguments to ensure exact match
+                    args = cmdline.split()
+                    if iface in args:
+                        # Double-check: the interface should be the last argument for dhclient
+                        # This prevents matching "dhclient eth0-backup" if iface="eth0"
+                        self._log("DEBUG", f"Killing dhclient PID {pid} for {iface} (cmdline: {cmdline})")
+                        subprocess.run(
+                            ["sudo", "kill", pid],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=3,
+                        )
+                        killed_any = True
+                except Exception as e:
+                    self._log("DEBUG", f"Error checking PID {pid}: {e}")
+                    continue
+            
+            if killed_any:
+                time.sleep(0.5)  # Brief wait for processes to exit
+                
+        except Exception as e:
+            self._log("DEBUG", f"Error in _kill_dhclient_for_interface: {e}")
+
     def _setup_dhclient(self, iface):
         """Request DHCP on interface"""
         try:
@@ -3921,13 +3986,8 @@ default-agent
 
             elif has_dhclient:
                 self._log("INFO", "Using dhclient...")
-                # Kill any existing dhclient for this interface
-                subprocess.run(
-                    ["sudo", "pkill", "-f", f"dhclient.*{iface}"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=3,
-                )
+                # Kill any existing dhclient for this interface (PID-based targeting)
+                self._kill_dhclient_for_interface(iface)
                 time.sleep(self.DHCP_KILL_WAIT)
 
                 # Request new lease with better error handling
@@ -3971,13 +4031,54 @@ default-agent
 
                 except subprocess.TimeoutExpired:
                     self._log("WARNING", "dhclient timed out after 30s")
-                    # Kill hung dhclient
-                    subprocess.run(
-                        ["sudo", "pkill", "-9", "-f", f"dhclient.*{iface}"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=3,
-                    )
+                    # Kill hung dhclient (PID-based targeting)
+                    try:
+                        # Get all dhclient PIDs
+                        result = subprocess.run(
+                            ["pidof", "dhclient"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            timeout=3,
+                        )
+                        
+                        if result.returncode == 0 and result.stdout.strip():
+                            pids = result.stdout.strip().split()
+                            
+                            for pid in pids:
+                                try:
+                                    # Get command line for this PID
+                                    ps_result = subprocess.run(
+                                        ["ps", "-p", pid, "-o", "args="],
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE,
+                                        text=True,
+                                        timeout=2,
+                                    )
+                                    
+                                    if ps_result.returncode != 0:
+                                        continue
+                                    
+                                    cmdline = ps_result.stdout.strip()
+                                    
+                                    # Check if this dhclient is managing our interface
+                                    # Split command line into arguments to ensure exact match
+                                    args = cmdline.split()
+                                    if iface in args:
+                                        # Double-check: the interface should be an argument for dhclient
+                                        # This prevents matching "dhclient eth0-backup" if iface="eth0"
+                                        self._log("DEBUG", f"Force killing dhclient PID {pid} for {iface} (cmdline: {cmdline})")
+                                        subprocess.run(
+                                            ["sudo", "kill", "-9", pid],
+                                            stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL,
+                                            timeout=3,
+                                        )
+                                except Exception as e:
+                                    self._log("DEBUG", f"Error force-killing PID {pid}: {e}")
+                                    continue
+                    except Exception as e:
+                        self._log("DEBUG", f"Error in timeout dhclient cleanup: {e}")
 
             else:
                 self._log(
