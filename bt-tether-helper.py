@@ -3908,14 +3908,15 @@ default-agent
                     
                     cmdline = ps_result.stdout.strip()
                     
-                    # Check if this dhclient is managing our interface
-                    # Match patterns like "dhclient bnep0", "dhclient -v bnep0", "dhclient -4 -v bnep0"
-                    # The interface must appear as a separate argument (with space before it or at end)
-                    # Split command line into arguments to ensure exact match
+                    # Parse dhclient command line more carefully
+                    # dhclient command format: dhclient [options] [interface]
+                    # The interface is typically the last argument
                     args = cmdline.split()
-                    if iface in args:
-                        # Double-check: the interface should be the last argument for dhclient
-                        # This prevents matching "dhclient eth0-backup" if iface="eth0"
+                    
+                    # The interface must be the LAST argument and match EXACTLY
+                    # This prevents matching "dhclient eth0" when looking for "eth0-backup"
+                    # or "dhclient bnep0" matching a config file path containing "bnep0"
+                    if args and args[-1] == iface:
                         self._log("DEBUG", f"Killing dhclient PID {pid} for {iface} (cmdline: {cmdline})")
                         subprocess.run(
                             ["sudo", "kill", pid],
@@ -3924,6 +3925,8 @@ default-agent
                             timeout=3,
                         )
                         killed_any = True
+                    else:
+                        self._log("DEBUG", f"Skipping PID {pid} - not managing {iface} (cmdline: {cmdline})")
                 except Exception as e:
                     self._log("DEBUG", f"Error checking PID {pid}: {e}")
                     continue
@@ -4062,11 +4065,9 @@ default-agent
                                     cmdline = ps_result.stdout.strip()
                                     
                                     # Check if this dhclient is managing our interface
-                                    # Split command line into arguments to ensure exact match
+                                    # The interface MUST be the last argument
                                     args = cmdline.split()
-                                    if iface in args:
-                                        # Double-check: the interface should be an argument for dhclient
-                                        # This prevents matching "dhclient eth0-backup" if iface="eth0"
+                                    if args and args[-1] == iface:
                                         self._log("DEBUG", f"Force killing dhclient PID {pid} for {iface} (cmdline: {cmdline})")
                                         subprocess.run(
                                             ["sudo", "kill", "-9", pid],
@@ -4074,6 +4075,8 @@ default-agent
                                             stderr=subprocess.DEVNULL,
                                             timeout=3,
                                         )
+                                    else:
+                                        self._log("DEBUG", f"Skipping force-kill PID {pid} - not managing {iface} (cmdline: {cmdline})")
                                 except Exception as e:
                                     self._log("DEBUG", f"Error force-killing PID {pid}: {e}")
                                     continue
