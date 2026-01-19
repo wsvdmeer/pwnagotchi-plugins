@@ -1061,7 +1061,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.2.0-beta"
+    __version__ = "1.2.1-beta"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -2458,26 +2458,6 @@ default-agent
         except Exception as e:
             self._log("ERROR", f"Error monitoring agent log: {e}")
 
-    def _start_rapid_ui_updates(self):
-        """Mark that UI should show transition state - called when state changes"""
-        # Note: We can't force pwnagotchi to refresh the screen from a plugin.
-        # The on_ui_update() method is called by the framework at its own interval.
-        # We just ensure the state flags are set so on_ui_update() shows the right status.
-        pass
-
-    def _rapid_ui_update(self):
-        """No-op - kept for compatibility with existing code that calls it"""
-        # The pwnagotchi framework controls when on_ui_update() is called.
-        # We can't force screen updates from a plugin.
-        pass
-
-    def _stop_rapid_ui_updates(self):
-        """Stop rapid UI updates"""
-        self._ui_update_active = False
-        if self._ui_update_timer:
-            self._ui_update_timer.cancel()
-            self._ui_update_timer = None
-
     def on_webhook(self, path, request):
         try:
             # Normalize path by stripping leading slash
@@ -2510,7 +2490,9 @@ default-agent
                         try:
                             self.on_ui_update(self._ui_reference)
                         except Exception as e:
-                            logging.debug(f"[bt-tether-helper] Error forcing UI update on connect: {e}")
+                            logging.debug(
+                                f"[bt-tether-helper] Error forcing UI update on connect: {e}"
+                            )
                     return jsonify(
                         {"success": True, "message": f"Connection started to {mac}"}
                     )
@@ -2527,7 +2509,9 @@ default-agent
                             try:
                                 self.on_ui_update(self._ui_reference)
                             except Exception as e:
-                                logging.debug(f"[bt-tether-helper] Error forcing UI update on connect: {e}")
+                                logging.debug(
+                                    f"[bt-tether-helper] Error forcing UI update on connect: {e}"
+                                )
                         return jsonify(
                             {
                                 "success": True,
@@ -3463,7 +3447,9 @@ default-agent
                         try:
                             self.on_ui_update(self._ui_reference)
                         except Exception as e:
-                            logging.debug(f"[bt-tether-helper] Error forcing UI update on pairing error: {e}")
+                            logging.debug(
+                                f"[bt-tether-helper] Error forcing UI update on pairing error: {e}"
+                            )
                     return
 
                 self._log("INFO", f"Pairing with {device_name} successful!")
@@ -3646,13 +3632,15 @@ default-agent
 
                         # Log for debugging
                         self._log("DEBUG", "Connection complete, flags cleared")
-                        
+
                         # Force immediate screen update to show IP/connected state
                         if self._ui_reference:
                             try:
                                 self.on_ui_update(self._ui_reference)
                             except Exception as e:
-                                logging.debug(f"[bt-tether-helper] Error forcing UI update on success: {e}")
+                                logging.debug(
+                                    f"[bt-tether-helper] Error forcing UI update on success: {e}"
+                                )
 
                     else:
                         self._log("WARNING", "No internet connectivity detected")
@@ -3668,13 +3656,15 @@ default-agent
                             self._connection_start_time = None
                             self._initializing = False
                             self._screen_needs_refresh = True
-                        
+
                         # Force immediate screen update
                         if self._ui_reference:
                             try:
                                 self.on_ui_update(self._ui_reference)
                             except Exception as e:
-                                logging.debug(f"[bt-tether-helper] Error forcing UI update on no-internet: {e}")
+                                logging.debug(
+                                    f"[bt-tether-helper] Error forcing UI update on no-internet: {e}"
+                                )
                 else:
                     self._log("WARNING", "NAP connected but no interface detected")
                     # Update cached UI status first
@@ -3706,7 +3696,9 @@ default-agent
                     try:
                         self.on_ui_update(self._ui_reference)
                     except Exception as e:
-                        logging.debug(f"[bt-tether-helper] Error forcing UI update on NAP failure: {e}")
+                        logging.debug(
+                            f"[bt-tether-helper] Error forcing UI update on NAP failure: {e}"
+                        )
 
         except Exception as e:
             self._log("ERROR", f"Connection thread error: {e}")
@@ -3727,13 +3719,15 @@ default-agent
                 if self._connection_in_progress:
                     self._connection_in_progress = False
                     self._connection_start_time = None
-            
+
             # Force immediate screen update to show final state (connected or error)
             if self._ui_reference:
                 try:
                     self.on_ui_update(self._ui_reference)
                 except Exception as e:
-                    logging.debug(f"[bt-tether-helper] Error forcing UI update in finally: {e}")
+                    logging.debug(
+                        f"[bt-tether-helper] Error forcing UI update in finally: {e}"
+                    )
 
     def _strip_ansi_codes(self, text):
         """Remove ANSI color/control codes from text"""
@@ -4110,212 +4104,6 @@ default-agent
             logging.error(
                 f"[bt-tether-helper] Localhost route verification failed: {e}"
             )
-
-    def _protect_existing_routes(self, bt_iface):
-        """Ensure existing interfaces (usb0, eth0) still have valid routes after DHCP on Bluetooth"""
-        try:
-            # Check if usb0 exists and should have a route (common for USB gadget mode)
-            for iface in ["usb0", "eth0"]:
-                try:
-                    # Check if interface exists and has IP
-                    result = subprocess.run(
-                        ["ip", "addr", "show", iface],
-                        capture_output=True,
-                        text=True,
-                        timeout=3,
-                    )
-                    if result.returncode != 0:
-                        continue  # Interface doesn't exist
-
-                    # Check if it has an IP
-                    ip_match = re.search(
-                        r"inet\s+(\d+\.\d+\.\d+)\.(\d+)", result.stdout
-                    )
-                    if not ip_match:
-                        continue  # No IP assigned
-
-                    subnet = ip_match.group(1)
-                    gateway = f"{subnet}.1"
-
-                    # Check if route exists for this interface
-                    route_check = subprocess.run(
-                        ["ip", "route", "show", "dev", iface],
-                        capture_output=True,
-                        text=True,
-                        timeout=3,
-                    )
-
-                    if route_check.returncode == 0 and route_check.stdout.strip():
-                        logging.debug(f"[bt-tether-helper] Route for {iface} OK")
-                    else:
-                        # Route may have been removed by DHCP, restore it
-                        logging.warning(
-                            f"[bt-tether-helper] Restoring route for {iface}..."
-                        )
-                        subprocess.run(
-                            [
-                                "sudo",
-                                "ip",
-                                "route",
-                                "add",
-                                f"{subnet}.0/24",
-                                "dev",
-                                iface,
-                            ],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=3,
-                        )
-                        # Add default route with higher metric so it doesn't override BT
-                        subprocess.run(
-                            [
-                                "sudo",
-                                "ip",
-                                "route",
-                                "add",
-                                "default",
-                                "via",
-                                gateway,
-                                "dev",
-                                iface,
-                                "metric",
-                                "50",
-                            ],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=3,
-                        )
-                        logging.info(f"[bt-tether-helper] ✓ Route for {iface} restored")
-
-                except Exception as e:
-                    logging.debug(f"[bt-tether-helper] Route check for {iface}: {e}")
-
-        except Exception as e:
-            logging.warning(f"[bt-tether-helper] Route protection check failed: {e}")
-
-    def _log_network_config(self, iface):
-        """Log current network configuration for debugging - optimized for RPi Zero W2"""
-        try:
-            # Check IP address
-            ip_result = subprocess.run(
-                ["ip", "addr", "show", iface],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=5,
-            )
-            logging.debug(  # Use debug level to reduce log spam on limited storage
-                f"[bt-tether-helper] Interface {iface} config:\n{ip_result.stdout}"
-            )
-
-            # Check routing table
-            route_result = subprocess.run(
-                ["ip", "route"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=5,
-            )
-            logging.debug(f"[bt-tether-helper] Routing table:\n{route_result.stdout}")
-
-            # Check DNS
-            try:
-                with open("/etc/resolv.conf", "r") as f:
-                    dns_config = f.read()
-                    logging.debug(f"[bt-tether-helper] DNS config:\n{dns_config}")
-            except Exception as dns_err:
-                logging.debug(
-                    f"[bt-tether-helper] Failed to read DNS config: {dns_err}"
-                )
-
-        except Exception as e:
-            logging.error(f"[bt-tether-helper] Failed to log network config: {e}")
-
-    def _setup_routing(self, iface):
-        """Setup default route and DNS for internet access"""
-        try:
-            logging.info(f"[bt-tether-helper] Setting up routing for {iface}...")
-
-            # DHCP is handled by _setup_dhclient, just ensure interface is up
-            logging.info(f"[bt-tether-helper] Ensuring {iface} is up for routing...")
-            try:
-                subprocess.run(
-                    ["sudo", "ip", "link", "set", iface, "up"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=5,
-                )
-            except Exception as e:
-                logging.warning(f"[bt-tether-helper] Failed to bring up {iface}: {e}")
-
-            # Wait for IP to be assigned
-            time.sleep(2)
-
-            # Get the gateway from the interface
-            ip_result = subprocess.run(
-                ["ip", "addr", "show", iface],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=5,
-            )
-
-            # Extract IP and calculate gateway (usually .1 on the subnet)
-
-            ip_match = re.search(r"inet (\d+\.\d+\.\d+)\.(\d+)/", ip_result.stdout)
-            if ip_match:
-                subnet = ip_match.group(1)
-                my_ip_last = ip_match.group(2)
-                gateway = f"{subnet}.1"
-                my_ip = f"{subnet}.{my_ip_last}"
-                logging.info(
-                    f"[bt-tether-helper] ✓ IP assigned: {my_ip}, gateway: {gateway}"
-                )
-
-                # Check if default route exists
-                route_check = subprocess.run(
-                    ["ip", "route", "show", "default"],
-                    stdout=subprocess.PIPE,
-                    text=True,
-                    timeout=5,
-                )
-
-                if iface not in route_check.stdout:
-                    logging.info(
-                        f"[bt-tether-helper] Adding default route via {gateway} on {iface}"
-                    )
-                    subprocess.run(
-                        [
-                            "sudo",
-                            "ip",
-                            "route",
-                            "add",
-                            "default",
-                            "via",
-                            gateway,
-                            "dev",
-                            iface,
-                            "metric",
-                            "100",  # Higher metric to avoid overriding local routes (bettercap API protection)
-                        ],
-                        timeout=5,
-                        check=False,
-                    )
-                else:
-                    logging.info(
-                        f"[bt-tether-helper] Default route via {iface} already exists"
-                    )
-
-            else:
-                logging.warning(
-                    f"[bt-tether-helper] ⚠️  No IPv4 address assigned to {iface}!"
-                )
-                logging.warning(
-                    f"[bt-tether-helper] ⚠️  Make sure Bluetooth tethering is enabled on your phone"
-                )
-
-        except Exception as e:
-            logging.error(f"[bt-tether-helper] Routing setup error: {e}")
 
     def _check_internet_connectivity(self):
         """Check if internet is accessible via Bluetooth interface specifically"""
@@ -4933,18 +4721,6 @@ default-agent
         except Exception as e:
             logging.error(f"[bt-tether-helper] Pairing error: {e}")
             return False
-
-    def _start_ble_advertising(self):
-        """Deprecated - device name advertising removed due to Android caching issues"""
-        pass
-
-    def _stop_ble_advertising(self):
-        """Deprecated - device name advertising removed due to Android caching issues"""
-        pass
-
-    def _name_update_loop(self):
-        """Deprecated - device name advertising removed due to Android caching issues"""
-        pass
 
     def _send_discord_notification(self, ip_address):
         """Send IP address notification to Discord webhook if configured"""
