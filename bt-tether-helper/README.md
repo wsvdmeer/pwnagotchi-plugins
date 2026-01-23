@@ -12,6 +12,8 @@ A comprehensive Bluetooth tethering plugin that provides guided setup and automa
 
 ![bt-tether-helper Web Interface](ui.png)
 
+![bt-tether-helper Screen Interface](screen.png)
+
 ## Tested Hardware Configuration
 
 **Development & Testing:**
@@ -42,7 +44,6 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
    ```
 
 2. Find your phone's MAC address:
-
    - Use the web interface scan function (see Usage section below), or
    - Check in Android: Settings → About Phone → Status → Bluetooth address
 
@@ -108,7 +109,6 @@ This is especially useful for troubleshooting when you have multiple network int
    > **Note:** Bluetooth tethering **must be enabled** before attempting to connect.
 
 2. **Pairing (First Time Only):**
-
    - Make sure your phone's MAC address is configured in `/etc/pwnagotchi/config.toml` (see Installation)
    - Click "Connect to Phone" in the web interface
    - A pairing dialog will appear on your phone
@@ -145,10 +145,14 @@ Both displays update in real-time based on connection state.
 main.plugins.bt-tether-helper.enabled = true  # Enable the plugin
 main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC address
 
-# Display Settings
-main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: enable/disable all on-screen display (default: true)
-main.plugins.bt-tether-helper.show_mini_status = true  # Show compact mini status indicator (single letter) (default: true)
-main.plugins.bt-tether-helper.mini_status_position = null  # Position [x, y] for mini status (null = auto top-right)
+# Display Settings - Master Switch
+main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: enable/disable all screen displays (default: true)
+
+# Display Settings - Mini Status (single-letter indicator)
+main.plugins.bt-tether-helper.show_mini_status = true  # Show mini status indicator (default: true)
+main.plugins.bt-tether-helper.mini_status_position = [200, 0]  # Custom position [x, y] for mini status (optional, default: auto top-right)
+
+# Display Settings - Detailed Status (full status line with IP)
 main.plugins.bt-tether-helper.show_detailed_status = true  # Show detailed status line with IP (default: true)
 main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for detailed status (default: [0, 82])
 
@@ -165,12 +169,15 @@ main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/web
 
 **Master Switch (`show_on_screen`):**
 
-- When `false`, disables ALL on-screen display (both mini and detailed status)
-- When `true`, allows mini and detailed status to be shown based on their individual settings
+- Global toggle to enable/disable all screen displays
+- When set to `false`, no status information will be shown on screen
+- Default: `true`
 
 **Mini Status (`show_mini_status`):**
 
-- Shows single-letter status indicator (typically top-right corner)
+- Shows single-letter status indicator
+- Position can be customized with `mini_status_position` (default: auto top-right corner)
+- Requires `show_on_screen = true`
 - **I** = Initializing (plugin startup)
 - **C** = Connected with internet (PAN active)
 - **T** = Connected and trusted (no internet yet)
@@ -288,7 +295,6 @@ The plugin uses multiple layers to detect when a device disconnects:
    ```
 
    Parses output for:
-
    - `Connected: yes/no` - Bluetooth connection status
    - `Paired: yes/no` - Pairing status
    - `Trusted: yes/no` - Trust/auto-connect status
