@@ -34,6 +34,8 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 - **Status Display**: Real-time connection status on Pwnagotchi screen
 - **PAN (Personal Area Network) Support**: Automatic network interface configuration
 - **Discord Notifications**: Optional webhook notifications when connected with IP address
+- **Telegram Notifications**: Optional Telegram bot notifications with IPv4 and IPv6 addresses
+- **IPv6 Support**: Full dual-stack support for connectivity checks and notifications
 
 ## Installation
 
@@ -92,7 +94,7 @@ When multiple network interfaces are active (e.g., USB and Bluetooth), the web i
 
 Use the **"Test Internet Connectivity"** button in the web interface to verify your connection:
 
-- **Ping Test**: Verifies IP connectivity to 8.8.8.8
+- **Ping Test**: Verifies IPv4 (8.8.8.8) and IPv6 connectivity (automatic fallback)
 - **DNS Test**: Tests DNS resolution using Python's socket library (resolves google.com)
 - **DNS Servers**: Shows configured DNS servers from /etc/resolv.conf
 - **Interface IP**: Shows the IP address assigned to bnep0
@@ -117,6 +119,8 @@ This is especially useful for troubleshooting when you have multiple network int
    - Verify the passkey matches on both devices
    - Tap "Pair" on your phone
    - Wait for connection to complete (up to 90 seconds)
+
+> **Android Note:** On modern Android, pairing may require interaction on both devices simultaneously. If pairing doesn't start, click "Connect to Phone" while also tapping the Pwnagotchi in your phone's Bluetooth settings.
 
 3. **Subsequent Connections:**
    - Once paired, simply click "Connect to Phone" in the web interface
@@ -164,6 +168,10 @@ main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every 
 
 # Discord Notifications (Optional)
 main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"  # Send IP notifications to Discord (optional)
+
+# Telegram Notifications (Optional)
+main.plugins.bt-tether-helper.telegram_bot_token = "123456:ABC..."  # Telegram bot token
+main.plugins.bt-tether-helper.telegram_chat_id = "123456789"        # Telegram chat ID
 ```
 
 ### Display Options
@@ -244,6 +252,27 @@ When your device connects, you'll receive a notification with the IP address and
 - Make sure your Pwnagotchi has internet access via the Bluetooth connection
 - Test the webhook URL directly with a tool like curl to verify it's working
 
+### Telegram Notifications
+
+Get notified via Telegram when your Pwnagotchi connects:
+
+- **Optional Feature**: Only activates when both `telegram_bot_token` and `telegram_chat_id` are configured
+- **Dual-Stack**: Sends both IPv4 and IPv6 addresses when available
+- **Works with Auto-Reconnect**: Notifications sent on all connections
+- **Non-Blocking**: Runs in background thread
+
+**Setup:**
+
+1. Create a bot via @BotFather on Telegram
+2. Copy the bot token
+3. Send any message to your bot
+4. Get your chat ID:
+   ```bash
+   curl https://api.telegram.org/bot<TOKEN>/getUpdates
+   ```
+5. Add to `/etc/pwnagotchi/config.toml`
+6. Restart: `pwnkill`
+
 ## Troubleshooting
 
 ### Pairing Fails
@@ -259,6 +288,7 @@ When your device connects, you'll receive a notification with the IP address and
 - Check that your phone has an active internet connection (mobile data or WiFi)
 - Use the **"Test Internet Connectivity"** button in the web interface to diagnose the issue
 - Check if USB is connected - if so, USB may be taking priority (see Active Route display)
+- Some Android devices provide IPv6-only connectivity over Bluetooth tethering; the plugin supports this automatically
 - Try disconnecting and reconnecting
 
 ### Bluetooth Service Unresponsive

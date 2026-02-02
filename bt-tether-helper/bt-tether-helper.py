@@ -28,6 +28,8 @@ Configuration options:
 - main.plugins.bt-tether-helper.show_detailed_status = true  # Show detailed status line with IP
 - main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for detailed status line
 - main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/webhooks/..."  # Discord webhook for IP notifications (optional)
+- main.plugins.bt-tether-helper.telegram_bot_token = "123456:ABC..."  # Telegram bot token for IP notifications (optional)
+- main.plugins.bt-tether-helper.telegram_chat_id = "123456789"  # Telegram chat ID for IP notifications (optional)
 """
 
 import subprocess
@@ -119,6 +121,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div style="color: #4ec9b0; font-size: 14px;">{{ mac if mac else 'Not configured' }}</div>
         <div style="color: #888; margin-bottom: 4px; margin-top: 8px;">Discord Webhook:</div>
         <div style="color: {% if discord_webhook_url %}#4ec9b0{% else %}#f48771{% endif %}; font-size: 14px;">{% if discord_webhook_url %}✓ Enabled{% else %}✗ Disabled{% endif %}</div>
+        <div style="color: #888; margin-bottom: 4px; margin-top: 8px;">Telegram Notifications:</div>
+        <div style="color: {% if telegram_enabled %}#4ec9b0{% else %}#f48771{% endif %}; font-size: 14px;">{% if telegram_enabled %}✓ Enabled{% else %}✗ Disabled{% endif %}</div>
       </div>
       
       <!-- Status in output style -->
@@ -816,6 +820,22 @@ class BTTetherHelper(Plugin):
         else:
             logging.info("[bt-tether-helper] Discord webhook not configured")
 
+        # Telegram bot configuration
+        self.telegram_bot_token = self.options.get("telegram_bot_token", "")
+        self.telegram_chat_id = self.options.get("telegram_chat_id", "")
+
+        # Log Telegram configuration status (mask the token for security)
+        if self.telegram_bot_token and self.telegram_chat_id:
+            # Mask the bot token for logging
+            masked_token = self.telegram_bot_token
+            if ":" in masked_token:
+                parts = masked_token.split(":")
+                parts[-1] = "***" + parts[-1][-4:] if len(parts[-1]) > 4 else "****"
+                masked_token = ":".join(parts)
+            logging.info(f"[bt-tether-helper] Telegram notifications configured: {masked_token}")
+        else:
+            logging.info("[bt-tether-helper] Telegram notifications not configured")
+
         # Lock to prevent multiple bluetoothctl commands from running simultaneously
         self._bluetoothctl_lock = threading.Lock()
 
@@ -1449,34 +1469,57 @@ default-agent
                     if self._check_internet_connectivity():
                         self._log("INFO", f"✓ Internet connectivity verified!")
 
-                        # Get IP address and send Discord notification if configured
+                        # Get IP addresses and send notifications if configured
                         try:
                             current_ip = self._get_current_ip()
+                            current_ipv6 = self._get_global_ipv6(iface)
+
                             if current_ip:
-                                self._log("INFO", f"Current IP address: {current_ip}")
-                                if self.discord_webhook_url:
-                                    self._log(
-                                        "INFO",
-                                        "Discord webhook configured, starting notification thread...",
-                                    )
-                                    threading.Thread(
-                                        target=self._send_discord_notification,
-                                        args=(current_ip,),
-                                        daemon=True,
-                                    ).start()
-                                else:
-                                    self._log(
-                                        "DEBUG",
-                                        "Discord webhook not configured, skipping notification",
-                                    )
-                            else:
+                                self._log("INFO", f"Current IPv4 address: {current_ip}")
+                            if current_ipv6:
+                                self._log("INFO", f"Current IPv6 address: {current_ipv6}")
+
+                            # Send Discord notification (IPv4 only, maintains compatibility)
+                            if current_ip and self.discord_webhook_url:
+                                self._log(
+                                    "INFO",
+                                    "Discord webhook configured, starting notification thread...",
+                                )
+                                threading.Thread(
+                                    target=self._send_discord_notification,
+                                    args=(current_ip,),
+                                    daemon=True,
+                                ).start()
+
+                            # Send Telegram notification (IPv6-aware)
+                            if self.telegram_bot_token and self.telegram_chat_id:
+                                pwnagotchi_name = self._get_pwnagotchi_name()
+                                message_lines = [f"📡 {pwnagotchi_name} connected via Bluetooth"]
+                                if current_ipv6:
+                                    message_lines.append(f"🌐 IPv6: {current_ipv6}")
+                                if current_ip:
+                                    message_lines.append(f"🌐 IPv4: {current_ip}")
+                                message_lines.append(f"🔌 Interface: {iface}")
+                                telegram_message = "\n".join(message_lines)
+
+                                self._log(
+                                    "INFO",
+                                    "Telegram configured, starting notification thread...",
+                                )
+                                threading.Thread(
+                                    target=self._send_telegram_notification,
+                                    args=(telegram_message,),
+                                    daemon=True,
+                                ).start()
+
+                            if not current_ip and not current_ipv6:
                                 self._log(
                                     "WARNING",
-                                    "Could not get IP address for Discord notification",
+                                    "Could not get any IP address for notifications",
                                 )
                         except Exception as e:
                             self._log(
-                                "ERROR", f"Failed to send Discord notification: {e}"
+                                "ERROR", f"Failed to send notifications: {e}"
                             )
 
                         # Update status and force screen refresh
@@ -1652,6 +1695,7 @@ default-agent
                         status=self.status,
                         message=self.message,
                         discord_webhook_url=self.discord_webhook_url,
+                        telegram_enabled=bool(self.telegram_bot_token and self.telegram_chat_id),
                     )
 
             if clean_path == "connect":
@@ -2293,34 +2337,57 @@ default-agent
                     if self._check_internet_connectivity():
                         self._log("INFO", "✓ Internet connectivity verified!")
 
-                        # Get IP address and send Discord notification if configured
+                        # Get IP addresses and send notifications if configured
                         try:
                             current_ip = self._get_current_ip()
+                            current_ipv6 = self._get_global_ipv6(iface)
+
                             if current_ip:
-                                self._log("INFO", f"Current IP address: {current_ip}")
-                                if self.discord_webhook_url:
-                                    self._log(
-                                        "INFO",
-                                        "Discord webhook configured, starting notification thread...",
-                                    )
-                                    threading.Thread(
-                                        target=self._send_discord_notification,
-                                        args=(current_ip,),
-                                        daemon=True,
-                                    ).start()
-                                else:
-                                    self._log(
-                                        "DEBUG",
-                                        "Discord webhook not configured, skipping notification",
-                                    )
-                            else:
+                                self._log("INFO", f"Current IPv4 address: {current_ip}")
+                            if current_ipv6:
+                                self._log("INFO", f"Current IPv6 address: {current_ipv6}")
+
+                            # Send Discord notification (IPv4 only, maintains compatibility)
+                            if current_ip and self.discord_webhook_url:
+                                self._log(
+                                    "INFO",
+                                    "Discord webhook configured, starting notification thread...",
+                                )
+                                threading.Thread(
+                                    target=self._send_discord_notification,
+                                    args=(current_ip,),
+                                    daemon=True,
+                                ).start()
+
+                            # Send Telegram notification (IPv6-aware)
+                            if self.telegram_bot_token and self.telegram_chat_id:
+                                pwnagotchi_name = self._get_pwnagotchi_name()
+                                message_lines = [f"📡 {pwnagotchi_name} connected via Bluetooth"]
+                                if current_ipv6:
+                                    message_lines.append(f"🌐 IPv6: {current_ipv6}")
+                                if current_ip:
+                                    message_lines.append(f"🌐 IPv4: {current_ip}")
+                                message_lines.append(f"🔌 Interface: {iface}")
+                                telegram_message = "\n".join(message_lines)
+
+                                self._log(
+                                    "INFO",
+                                    "Telegram configured, starting notification thread...",
+                                )
+                                threading.Thread(
+                                    target=self._send_telegram_notification,
+                                    args=(telegram_message,),
+                                    daemon=True,
+                                ).start()
+
+                            if not current_ip and not current_ipv6:
                                 self._log(
                                     "WARNING",
-                                    "Could not get IP address for Discord notification",
+                                    "Could not get any IP address for notifications",
                                 )
                         except Exception as e:
                             self._log(
-                                "ERROR", f"Failed to send Discord notification: {e}"
+                                "ERROR", f"Failed to send notifications: {e}"
                             )
 
                         with self.lock:
@@ -2940,12 +3007,12 @@ default-agent
             logging.error(f"[bt-tether-helper] Routing setup error: {e}")
 
     def _check_internet_connectivity(self):
-        """Check if internet is accessible via Bluetooth interface specifically"""
+        """Check if internet is accessible via Bluetooth interface specifically (IPv4 or IPv6)"""
         try:
             # Get the BT interface
             bt_iface = self._get_pan_interface() or "bnep0"
 
-            # First verify bnep0 has an IP - if not, no point testing connectivity
+            # First verify interface has an IP - check for both IPv4 and IPv6
             ip_result = subprocess.run(
                 ["ip", "addr", "show", bt_iface],
                 stdout=subprocess.PIPE,
@@ -2958,13 +3025,22 @@ default-agent
                 logging.warning(f"[bt-tether-helper] {bt_iface} interface not found")
                 return False
 
-            ip_match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", ip_result.stdout)
-            if not ip_match or ip_match.group(1).startswith("169.254."):
-                logging.warning(f"[bt-tether-helper] {bt_iface} has no valid IP")
+            # Check for IPv4 address (exclude link-local 169.254.x.x)
+            ipv4_match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", ip_result.stdout)
+            has_ipv4 = ipv4_match and not ipv4_match.group(1).startswith("169.254.")
+
+            # Check for IPv6 address (exclude link-local fe80::)
+            ipv6_match = re.search(r"inet6\s+([0-9a-fA-F:]+)", ip_result.stdout)
+            has_ipv6 = ipv6_match and not ipv6_match.group(1).startswith("fe80")
+
+            if not has_ipv4 and not has_ipv6:
+                logging.warning(f"[bt-tether-helper] {bt_iface} has no valid IP (IPv4 or IPv6)")
                 return False
 
-            bt_ip = ip_match.group(1)
-            logging.info(f"[bt-tether-helper] {bt_iface} has IP: {bt_ip}")
+            if has_ipv4:
+                logging.info(f"[bt-tether-helper] {bt_iface} has IPv4: {ipv4_match.group(1)}")
+            if has_ipv6:
+                logging.info(f"[bt-tether-helper] {bt_iface} has IPv6: {ipv6_match.group(1)}")
 
             # Log current routing table for diagnostics
             route_check = subprocess.run(
@@ -2979,49 +3055,72 @@ default-agent
                     f"[bt-tether-helper] Current routes:\n{route_check.stdout}"
                 )
 
-            # Ping via the Bluetooth interface specifically
-            logging.info(
-                f"[bt-tether-helper] Testing connectivity to 8.8.8.8 via {bt_iface}..."
-            )
-            result = subprocess.run(
-                ["ping", "-c", "2", "-W", "3", "-I", bt_iface, "8.8.8.8"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=10,
-            )
+            # Try IPv4 connectivity first (if we have IPv4)
+            if has_ipv4:
+                logging.info(
+                    f"[bt-tether-helper] Testing IPv4 connectivity to 8.8.8.8 via {bt_iface}..."
+                )
+                result = subprocess.run(
+                    ["ping", "-c", "2", "-W", "3", "-I", bt_iface, "8.8.8.8"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=10,
+                )
 
-            if result.returncode == 0:
-                logging.info(f"[bt-tether-helper] ✓ Ping to 8.8.8.8 successful")
+                if result.returncode == 0:
+                    logging.info(f"[bt-tether-helper] ✓ IPv4 ping to 8.8.8.8 successful")
 
-                # Also verify DNS resolution works
-                logging.info(f"[bt-tether-helper] Testing DNS resolution...")
-                try:
-                    dns_result = subprocess.run(
-                        ["nslookup", "google.com"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=5,
-                    )
-                    if dns_result.returncode == 0:
-                        logging.info(f"[bt-tether-helper] ✓ DNS resolution working")
-                        return True
-                    else:
+                    # Also verify DNS resolution works
+                    logging.info(f"[bt-tether-helper] Testing DNS resolution...")
+                    try:
+                        dns_result = subprocess.run(
+                            ["nslookup", "google.com"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            timeout=5,
+                        )
+                        if dns_result.returncode == 0:
+                            logging.info(f"[bt-tether-helper] ✓ DNS resolution working")
+                            return True
+                        else:
+                            logging.warning(
+                                f"[bt-tether-helper] DNS resolution failed but ping works"
+                            )
+                            return True  # Ping works, so basic connectivity is there
+                    except:
                         logging.warning(
-                            f"[bt-tether-helper] DNS resolution failed but ping works"
+                            f"[bt-tether-helper] DNS test failed but ping works"
                         )
                         return True  # Ping works, so basic connectivity is there
-                except:
-                    logging.warning(
-                        f"[bt-tether-helper] DNS test failed but ping works"
-                    )
-                    return True  # Ping works, so basic connectivity is there
-            else:
-                logging.warning(f"[bt-tether-helper] Ping to 8.8.8.8 failed")
-                logging.warning(f"[bt-tether-helper] Ping stderr: {result.stderr}")
-                logging.warning(f"[bt-tether-helper] Ping stdout: {result.stdout}")
+                else:
+                    logging.warning(f"[bt-tether-helper] IPv4 ping to 8.8.8.8 failed")
+                    logging.debug(f"[bt-tether-helper] Ping stderr: {result.stderr}")
+                    logging.debug(f"[bt-tether-helper] Ping stdout: {result.stdout}")
 
-                # Try to ping the gateway to see if that works
+            # Try IPv6 connectivity (if we have IPv6 and IPv4 failed or wasn't available)
+            if has_ipv6:
+                logging.info(
+                    f"[bt-tether-helper] Testing IPv6 connectivity via {bt_iface}..."
+                )
+                result = subprocess.run(
+                    ["ping", "-6", "-c", "2", "-W", "3", "-I", bt_iface, "google.com"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=10,
+                )
+
+                if result.returncode == 0:
+                    logging.info(f"[bt-tether-helper] ✓ IPv6 connectivity verified")
+                    return True
+                else:
+                    logging.warning(f"[bt-tether-helper] IPv6 ping failed")
+                    logging.debug(f"[bt-tether-helper] Ping stderr: {result.stderr}")
+                    logging.debug(f"[bt-tether-helper] Ping stdout: {result.stdout}")
+
+            # Both IPv4 and IPv6 failed - do gateway diagnostics for IPv4 if available
+            if has_ipv4:
                 gateway_check = subprocess.run(
                     ["ip", "route", "show", "default"],
                     stdout=subprocess.PIPE,
@@ -3030,7 +3129,6 @@ default-agent
                     timeout=5,
                 )
                 if gateway_check.returncode == 0 and gateway_check.stdout:
-
                     match = re.search(r"default via ([\d.]+)", gateway_check.stdout)
                     if match:
                         gateway = match.group(1)
@@ -3053,7 +3151,7 @@ default-agent
                                 f"[bt-tether-helper] Gateway ping also failed - phone may not be providing internet"
                             )
 
-                return False
+            return False
         except subprocess.TimeoutExpired:
             logging.warning(
                 f"[bt-tether-helper] Ping timeout - no internet connectivity"
@@ -3300,6 +3398,26 @@ default-agent
             return None
         except Exception as e:
             logging.debug(f"[bt-tether-helper] Failed to get IP for {iface}: {e}")
+            return None
+
+    def _get_global_ipv6(self, iface=None):
+        """Get global IPv6 address from the Bluetooth PAN interface"""
+        try:
+            if iface is None:
+                iface = self._get_pan_interface() or "bnep0"
+            result = subprocess.check_output(
+                ["ip", "-6", "addr", "show", iface, "scope", "global"],
+                text=True,
+                timeout=5,
+            )
+            for line in result.splitlines():
+                line = line.strip()
+                if line.startswith("inet6"):
+                    # Extract IPv6 address (e.g., "inet6 2a00:20:b2d5:bdeb::1/64" -> "2a00:20:b2d5:bdeb::1")
+                    return line.split()[1].split("/")[0]
+            return None
+        except Exception as e:
+            logging.debug(f"[bt-tether-helper] Failed to get IPv6 for {iface}: {e}")
             return None
 
     def _get_bluetooth_adapter(self):
@@ -3652,6 +3770,53 @@ default-agent
             self._log("ERROR", f"Discord webhook failed (network error): {e.reason}")
         except Exception as e:
             self._log("ERROR", f"Discord webhook failed: {type(e).__name__}: {e}")
+            self._log("ERROR", f"Traceback: {traceback.format_exc()}")
+
+    def _send_telegram_notification(self, message):
+        """Send notification message to Telegram bot if configured"""
+        if not self.telegram_bot_token or not self.telegram_chat_id:
+            self._log("DEBUG", "Telegram not configured, skipping notification")
+            return
+
+        if not URLLIB_AVAILABLE:
+            self._log("WARNING", "urllib not available, Telegram notification skipped")
+            return
+
+        self._log("INFO", "Sending Telegram notification...")
+        try:
+            import urllib.parse
+
+            api_url = f"https://api.telegram.org/bot{self.telegram_bot_token}/sendMessage"
+
+            payload = {
+                "chat_id": self.telegram_chat_id,
+                "text": message,
+                "disable_web_page_preview": True,
+            }
+
+            data = urllib.parse.urlencode(payload).encode("utf-8")
+            req = urllib.request.Request(api_url, data=data, method="POST")
+            req.add_header("Content-Type", "application/x-www-form-urlencoded")
+
+            with urllib.request.urlopen(req, timeout=10) as response:
+                status_code = response.status
+                if status_code == 200:
+                    self._log("INFO", "✓ Telegram notification sent successfully")
+                else:
+                    response_body = response.read().decode("utf-8")
+                    self._log(
+                        "WARNING",
+                        f"Telegram API returned status {status_code}: {response_body}",
+                    )
+
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8") if e.fp else "No response body"
+            self._log("ERROR", f"Telegram API HTTP error {e.code}: {e.reason}")
+            self._log("ERROR", f"Response body: {error_body}")
+        except urllib.error.URLError as e:
+            self._log("ERROR", f"Telegram notification failed (network error): {e.reason}")
+        except Exception as e:
+            self._log("ERROR", f"Telegram notification failed: {type(e).__name__}: {e}")
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
 
     def _get_current_ip(self):
