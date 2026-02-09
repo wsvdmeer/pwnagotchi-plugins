@@ -168,6 +168,26 @@ Before making changes, test on actual RPi:
   - If "profile-unavailable" errors occur, it's likely a BlueZ discovery timing issue, not missing tethering
   - Do NOT suggest disabling/re-enabling tethering as the first diagnostic step
 
+### Device Switching Coordination
+
+- When switching devices via web UI, the `_switching_in_progress` flag is set to prevent the connection monitor from interfering
+- The connection monitor thread checks this flag and skips device selection (Priority 1) during switches
+- Device switching immediately updates `phone_mac` and clears last-connected device memory to ensure the new device is selected
+- This prevents `br-connection-busy` errors and racing conditions between threads
+
+### NAP Profile Connection
+
+- Connect directly to NAP profile using `device.ConnectProfile(NAP_UUID)` instead of generic `device.Connect()`
+- Generic `Connect()` fails if any optional profile is unavailable - it's too strict
+- `ConnectProfile()` specifically targets the NAP profile and handles unavailability gracefully
+- This approach is more reliable for tethering connections
+
+### Logging Best Practices
+
+- Web UI polling operations (like `/trusted-devices`) should use DEBUG level, not INFO
+- INFO-level messages should be for significant events (connections, errors, user actions)
+- Frequent polling can generate 100+ log entries per minute - use DEBUG to reduce noise
+
 ---
 
 **Remember**: Test on actual RPi hardware. Assumptions about subprocess behavior that work on Windows/WSL may fail on bare metal RPi Linux.

@@ -16,6 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Code quality improvements with comprehensive comment cleanup
 - Comprehensive code analysis documentation (CODE_ANALYSIS.md)
 - Failed connection retry tracking for NoReply errors
+- Device switch coordination flag (`_switching_in_progress`) to prevent monitor interference during device switches
 
 ### Changed
 
@@ -37,6 +38,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
   - If device is paired but not trusted, re-pairs to get trust confirmation (instead of false "broken pairing" detection)
   - Device discovery during pairing now skips scan if device is already known to bluetoothctl
   - Fixed subprocess.Popen issues with scan commands (replaced with \_run_cmd for reliability)
+- **NAP connection**: Removed generic `device.Connect()` call in favor of direct `device.ConnectProfile(NAP_UUID)` for more reliable NAP connection
+- **Logging**: Changed "Returning X trusted devices to web UI" from INFO to DEBUG level to reduce log spam from frequent web UI polling
+- **Device switching**: Improved coordination between web request handler and connection monitor to prevent racing conditions
+  - Sets `phone_mac` immediately when switch is initiated
+  - Connection monitor skips currently-connected device selection during switch (`_switching_in_progress` flag)
+  - Clears last-connected device memory to force selection of new device
 
 ### Fixed
 
@@ -44,6 +51,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Pairing failures caused by unnecessary device re-discovery scan
 - Broken pipe errors when stopping scan with subprocess.Popen
 - Double pairing attempts on devices with cached untrusted pairing
+- NAP connection failures due to generic `Connect()` call failing when NAP profile not immediately available
+- **Device switching now works correctly** - prevented connection monitor from auto-reconnecting to old device during switch
+- **Reduced log spam** - web UI polling no longer fills logs with INFO-level messages
 
 ---
 

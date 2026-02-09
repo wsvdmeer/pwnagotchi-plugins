@@ -10,7 +10,7 @@ This document provides a comprehensive analysis of the bt-tether-helper plugin f
 - Dead code paths
 - Functions with low/no usage
 
-**File Size:** 6,249 lines of Python code
+**File Size:** 6,587 lines of Python code (after recent NAP connection and device switch fixes)
 
 ---
 
@@ -46,8 +46,9 @@ This document provides a comprehensive analysis of the bt-tether-helper plugin f
 | `_get_trusted_devices()`     | 3410 | **5+**     | Web route + lifecycle          |
 | `_update_cached_ui_status()` | 1961 | **20+**    | UI sync (frequent updates)     |
 | `_get_current_status()`      | 3299 | **10+**    | Status checking                |
-| `_connection_monitor_loop()` | 2088 | **1**      | Background thread (continuous) |
+| `_connection_monitor_loop()` | 2152 | **1**      | Background thread (continuous) |
 | `_reconnect_device()`        | 2313 | **2**      | Auto-reconnect logic           |
+| `_select_best_device()`      | 3743 | **5+**     | Device selection logic         |
 
 ---
 
@@ -80,24 +81,25 @@ This document provides a comprehensive analysis of the bt-tether-helper plugin f
 
 ## 🟢 **MEDIUM-USAGE FUNCTIONS** (Used regularly)
 
-| Function                           | Line | Usage                   | Purpose             |
-| ---------------------------------- | ---- | ----------------------- | ------------------- |
-| `_initialize_bluetooth_services()` | 1415 | Called once in on_ready | Setup Bluetooth     |
-| `_start_monitoring_thread()`       | 2058 | Called 2+ times         | Start monitoring    |
-| `_stop_monitoring_thread()`        | 2077 | Called in on_unload     | Cleanup             |
-| `_format_detailed_status()`        | 1908 | Called in on_ui_update  | UI display          |
-| `_start_pairing_agent()`           | 1992 | Called in init          | Setup pairing       |
-| `_scan_devices()`                  | 3537 | Called via route        | Device scanning     |
-| `_get_full_connection_status()`    | 3394 | Called in web route     | Status endpoint     |
-| `_find_best_device_to_connect()`   | 3467 | Called 3+ times         | Auto-connect logic  |
-| `_connect_thread()`                | 3851 | Called via threading    | Connection handler  |
-| `start_connection()`               | 3794 | Called 5+ times         | Initiate connection |
-| `_validate_mac()`                  | 3039 | Called 10+ times        | Input validation    |
-| `_disconnect_device()`             | 3044 | Called in web route     | Disconnect logic    |
-| `_get_pan_interface()`             | 5585 | Called 10+ times        | Network interface   |
-| `_pan_active()`                    | 5379 | Called 10+ times        | Check PAN status    |
-| `_check_internet_connectivity()`   | 5277 | Called 5+ times         | Connectivity check  |
-| `_get_current_ip()`                | 5963 | Called 3+ times         | Get IP address      |
+| Function                           | Line | Usage                       | Purpose                |
+| ---------------------------------- | ---- | --------------------------- | ---------------------- |
+| `_initialize_bluetooth_services()` | 1415 | Called once in on_ready     | Setup Bluetooth        |
+| `_start_monitoring_thread()`       | 2058 | Called 2+ times             | Start monitoring       |
+| `_stop_monitoring_thread()`        | 2077 | Called in on_unload         | Cleanup                |
+| `_format_detailed_status()`        | 1908 | Called in on_ui_update      | UI display             |
+| `_start_pairing_agent()`           | 1992 | Called in init              | Setup pairing          |
+| `_scan_devices()`                  | 3537 | Called via route            | Device scanning        |
+| `_get_full_connection_status()`    | 3394 | Called in web route         | Status endpoint        |
+| `_find_best_device_to_connect()`   | 3467 | Called 3+ times             | Auto-connect logic     |
+| `_connect_thread()`                | 3851 | Called via threading        | Connection handler     |
+| `start_connection()`               | 3794 | Called 5+ times             | Initiate connection    |
+| `_validate_mac()`                  | 3039 | Called 10+ times            | Input validation       |
+| `_disconnect_device()`             | 3044 | Called in web route         | Disconnect logic       |
+| `_get_pan_interface()`             | 5585 | Called 10+ times            | Network interface      |
+| `_pan_active()`                    | 5379 | Called 10+ times            | Check PAN status       |
+| `_check_internet_connectivity()`   | 5277 | Called 5+ times             | Connectivity check     |
+| `_get_current_ip()`                | 5963 | Called 3+ times             | Get IP address         |
+| `_connect_nap_dbus()`              | 6414 | Called via \_connect_thread | NAP profile connection |
 
 ---
 

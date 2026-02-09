@@ -706,7 +706,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
             
             if (connectedDevice && statusConnectedDiv) {
-              statusConnectedDiv.innerHTML = `✅ <span style="color: #3fb950; font-weight: bold;">${connectedDevice.name}</span>`;
+              // Keep the status display consistent - don't override with device name
+              // Device name is shown in the deviceNameDisplay instead
             }
             
             if (trustedDevicesSection) {
@@ -1371,6 +1372,9 @@ class BTTetherHelper(Plugin):
         self.phone_mac = ""
         self._last_connected_mac = None  # Track last successfully connected device MAC
         self._last_connected_name = None  # Track last successfully connected device NAME (more reliable than MAC)
+        self._switching_in_progress = (
+            False  # Flag to prevent auto-reconnect during device switch
+        )
         self._status = self.STATE_IDLE
         self._message = "Ready"
         self._scanning = False
@@ -2157,11 +2161,12 @@ default-agent
 
         while not self._monitor_stop.is_set():
             try:
-                # Skip monitoring if connection/pairing is already in progress
+                # Skip monitoring if connection/pairing is already in progress OR if a device switch is happening
                 with self.lock:
                     connection_in_progress = self._connection_in_progress
+                    switching_in_progress = self._switching_in_progress
 
-                if connection_in_progress:
+                if connection_in_progress or switching_in_progress:
                     time.sleep(self.reconnect_interval)
                     continue
 
@@ -3224,23 +3229,33 @@ default-agent
                     return jsonify({"success": False, "message": "Invalid MAC"})
 
                 if self.phone_mac and self.phone_mac != new_mac:
+                    # Set flag to prevent connection monitor from auto-reconnecting during switch
+                    self._switching_in_progress = True
+                    old_mac = self.phone_mac
                     try:
                         self._log(
                             "INFO",
-                            f"Switching from {self.phone_mac} to {new_mac}...",
+                            f"Switching from {old_mac} to {new_mac}...",
                         )
+
+                        # Set new phone_mac immediately so device selection prefers the new device
+                        with self.lock:
+                            self.phone_mac = new_mac
+                            # Clear last connected device to force selection of new_mac
+                            self._last_connected_name = None
+                            self._last_connected_mac = None
 
                         # Get current interface before disconnecting
                         current_iface = self._get_pan_interface()
 
                         # Disconnect NAP profile first (important for phone to release tethering)
-                        if self.phone_mac:
+                        if old_mac:
                             try:
                                 import dbus
 
                                 self._log(
                                     "INFO",
-                                    f"Disconnecting NAP profile from {self.phone_mac}...",
+                                    f"Disconnecting NAP profile from {old_mac}...",
                                 )
                                 bus = dbus.SystemBus()
                                 manager = dbus.Interface(
@@ -3252,7 +3267,7 @@ default-agent
                                 for path, interfaces in objects.items():
                                     if "org.bluez.Device1" in interfaces:
                                         props = interfaces["org.bluez.Device1"]
-                                        if props.get("Address") == self.phone_mac:
+                                        if props.get("Address") == old_mac:
                                             device_path = path
                                             break
 
@@ -3297,7 +3312,7 @@ default-agent
 
                         # Disconnect from current device
                         self._run_cmd(
-                            ["bluetoothctl", "disconnect", self.phone_mac],
+                            ["bluetoothctl", "disconnect", old_mac],
                             capture=True,
                             timeout=self.STANDARD_TIMEOUT,
                         )
@@ -3309,9 +3324,9 @@ default-agent
                         logging.debug(
                             f"[bt-tether-helper] Disconnect during switch: {e}"
                         )
-
-                with self.lock:
-                    self.phone_mac = new_mac
+                    finally:
+                        # Clear switch flag to allow monitor to resume
+                        self._switching_in_progress = False
 
                 self.start_connection()
                 return jsonify({"success": True, "message": f"Switching to {new_mac}"})
@@ -3786,16 +3801,18 @@ default-agent
                         f"Found {len(nap_devices)} trusted device(s) with tethering capability",
                     )
 
-                # Priority 1: Currently connected device
-                connected_devices = [d for d in nap_devices if d["connected"]]
-                if connected_devices:
-                    device = connected_devices[0]
-                    if log_results:
-                        self._log(
-                            "INFO",
-                            f"Using already connected device: {device['name']} ({device['mac']})",
-                        )
-                    return device
+                # Priority 1: Currently connected device (unless we're switching devices)
+                # During a switch, skip the currently connected device and use the new phone_mac
+                if not self._switching_in_progress:
+                    connected_devices = [d for d in nap_devices if d["connected"]]
+                    if connected_devices:
+                        device = connected_devices[0]
+                        if log_results:
+                            self._log(
+                                "INFO",
+                                f"Using already connected device: {device['name']} ({device['mac']})",
+                            )
+                        return device
 
                 # Priority 2: Last successfully connected device (search by NAME first, then MAC)
                 # Prefer name-based matching since phones randomize MAC addresses for privacy
