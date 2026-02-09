@@ -188,6 +188,28 @@ Before making changes, test on actual RPi:
 - INFO-level messages should be for significant events (connections, errors, user actions)
 - Frequent polling can generate 100+ log entries per minute - use DEBUG to reduce noise
 
+### Device Rotation on Reconnection Failure
+
+When auto-reconnection fails with multiple trusted devices available:
+
+1. **Initial failure**: First device that fails to reconnect is marked in `_devices_tried_in_cycle`
+2. **Rotation list build**: All NAP devices except the failing one are added to `_device_rotation_list`
+3. **Automatic retry**: System automatically tries next untried device in the rotation
+4. **Full cycle**: Continues through all devices before applying cooldown
+5. **Reset conditions**:
+   - Successful connection → Clear rotation list and reset counter
+   - Cooldown period expires → Reset rotation state for full retry
+   - Device loses trust status → Reset tracking
+   - User manually disconnects → Clear all state
+
+**Key variables**:
+
+- `_device_rotation_list` - List of remaining devices to try
+- `_current_device_index` - Current position (reserved for future use)
+- `_devices_tried_in_cycle` - Set of MACs already attempted this cycle
+
+**Important**: Device rotation only happens when reconnection fails. If a device successfully connects, it becomes the primary and no rotation occurs unless it drops and can't reconnect.
+
 ---
 
 **Remember**: Test on actual RPi hardware. Assumptions about subprocess behavior that work on Windows/WSL may fail on bare metal RPi Linux.

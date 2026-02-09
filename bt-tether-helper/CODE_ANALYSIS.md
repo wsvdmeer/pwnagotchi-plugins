@@ -10,7 +10,7 @@ This document provides a comprehensive analysis of the bt-tether-helper plugin f
 - Dead code paths
 - Functions with low/no usage
 
-**File Size:** 6,587 lines of Python code (after recent NAP connection and device switch fixes)
+**File Size:** 6,629 lines of Python code (after device rotation feature added)
 
 ---
 
@@ -279,6 +279,38 @@ self.discord_webhook_url = ""                        ✅ Used if configured
 ```
 
 **Status: No unused configuration options ✅**
+
+---
+
+## 🔄 **DEVICE ROTATION STATE VARIABLES** (New Feature)
+
+### Device Switching on Reconnection (Added Feb 9, 2026)
+
+| Variable                  | Location  | Purpose                            | Status |
+| ------------------------- | --------- | ---------------------------------- | ------ |
+| `_device_rotation_list`   | on_loaded | List of devices to try in sequence | ✅     |
+| `_current_device_index`   | on_loaded | Current position in rotation list  | ✅     |
+| `_devices_tried_in_cycle` | on_loaded | Set of MACs tried this cycle       | ✅     |
+
+### Usage in Connection Monitor (Line 2152-2436)
+
+**How device rotation works:**
+
+1. When reconnection to primary device fails, `_devices_tried_in_cycle` marks it as tried
+2. `_device_rotation_list` is built from all available NAP devices (except failing one)
+3. Next untried device in rotation is automatically selected
+4. Process repeats until all devices tried or max failures reached
+5. On successful connection, rotation list is cleared and resets on next failure
+6. On cooldown expiry, rotation state resets for full cycle retry
+
+**Variables properly managed:**
+
+- ✅ Initialized in `on_loaded()`
+- ✅ Reset on successful connection (line 2296, 2358, 2369)
+- ✅ Reset on cooldown expiry (line 2420)
+- ✅ Reset on disconnect (line 3565-3567)
+- ✅ Reset when device loses trust status (line 2432)
+- No memory leaks or dangling references
 
 ---
 

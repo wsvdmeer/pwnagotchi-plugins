@@ -17,6 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Comprehensive code analysis documentation (CODE_ANALYSIS.md)
 - Failed connection retry tracking for NoReply errors
 - Device switch coordination flag (`_switching_in_progress`) to prevent monitor interference during device switches
+- **Device rotation on reconnection**: When reconnection fails with multiple trusted devices available
+  - Automatically cycles through all available devices before pausing
+  - Each failed device is marked in a cycle and next untried device is attempted
+  - Rotation list resets after successful connection or when cooldown period expires
+  - Ensures resilience when a single phone becomes unavailable or unresponsive
 
 ### Changed
 

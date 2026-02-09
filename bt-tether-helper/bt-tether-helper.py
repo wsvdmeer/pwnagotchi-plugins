@@ -103,6 +103,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       .mac-editor { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
       .mac-editor input { flex: 1; min-width: 200px; }
       .mac-editor button { white-space: nowrap; }
+      .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 12px; border-bottom: 1px solid #30363d; }
+      .header h2 { margin: 0; flex-grow: 1; }
+      .header-nav { display: flex; gap: 8px; }
+      .header-nav a { color: #58a6ff; text-decoration: none; padding: 8px 12px; border: 1px solid #30363d; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px; transition: all 0.2s; font-size: 14px; }
+      .header-nav a:hover { background: rgba(88, 166, 255, 0.1); border-color: #58a6ff; }
       @media (max-width: 600px) {
         .mac-editor { flex-direction: column; align-items: stretch; }
         .mac-editor input { width: 100%; }
@@ -111,48 +116,51 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     </style>
   </head>
   <body>
-    <h2>🔷 Bluetooth Tether</h2>
+    <div class="header">
+      <h2>🔷 Bluetooth Tether</h2>
+      <div class="header-nav">
+        <a href="/plugins">← Plugins</a>
+      </div>
+    </div>
     
     <!-- Phone Connection & Status -->
     <div class="card" id="phoneConnectionCard">
       <h3 style="margin: 0 0 12px 0;">📱 Connection Status</h3>
       
       <!-- Network Routes & Metrics -->
-      <div id="networkMetricsInfo" style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
+      <div id="networkMetricsInfo" style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 16px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
         <div style="color: #888; margin-bottom: 8px;">📊 Network Routes (sorted by priority):</div>
         <div id="networkMetricsContent" style="font-size: 13px;">
           <div style="color: #888;">Fetching metrics...</div>
         </div>
       </div>
       
-      <!-- Status in output style -->
-      <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
-        <div id="deviceNameDisplay" style="display: none; margin: 0 0 12px 0; padding: 8px; background: rgba(88, 166, 255, 0.1); border-left: 3px solid #58a6ff; border-radius: 3px; font-size: 13px; font-weight: bold; color: #58a6ff;"></div>
-        <div id="lastConnectedDisplay" style="display: none; margin: 0 0 12px 0; padding: 8px; background: rgba(78, 201, 176, 0.1); border-left: 3px solid #4ec9b0; border-radius: 3px; font-size: 13px; font-weight: bold; color: #4ec9b0;"></div>
-        <div style="color: #888; margin-bottom: 8px;">Connection Status:</div>
-        <div id="statusActiveConnection" style="display: none; margin: 4px 0; padding: 8px; background: rgba(78, 201, 176, 0.1); border-left: 3px solid #4ec9b0; margin-bottom: 8px;"></div>
-        <div id="statusPaired" style="margin: 4px 0;">📱 Paired: <span>Checking...</span></div>
-        <div id="statusTrusted" style="margin: 4px 0;">🔐 Trusted: <span>Checking...</span></div>
-        <div id="statusConnected" style="margin: 4px 0;">🔵 Connected: <span>Checking...</span></div>
-        <div id="statusInternet" style="margin: 4px 0;">🌐 Internet: <span>Checking...</span></div>
-        <div id="statusIP" style="display: none; margin: 4px 0;">🔢 IP Address: <span></span></div>
-      </div>
-      
       <!-- Hidden input for JavaScript to access MAC value -->
       <input type="hidden" id="macInput" value="{{ mac }}" />
       
-      <!-- Trusted Devices Section -->
-      <div id="trustedDevicesSection" style="display: none; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #30363d;">
-        <h4 style="margin: 0 0 12px 0;">📱 Trusted Devices</h4>
+      <!-- Trusted Devices Section (now includes status info) -->
+      <div id="trustedDevicesSection" style="display: none;">
+        <h4 style="margin: 0 0 12px 0;">📱 Trusted Devices & Status</h4>
+        
+        <!-- Combined Status Section - shown inside trustedDevicesSection -->
+        <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
+          <div id="statusPaired" style="margin: 4px 0;">📱 Paired: <span>Checking...</span></div>
+          <div id="statusTrusted" style="margin: 4px 0;">🔐 Trusted: <span>Checking...</span></div>
+          <div id="statusConnected" style="margin: 4px 0;">🔵 Connected: <span>Checking...</span></div>
+          <div id="statusInternet" style="margin: 4px 0;">🌐 Internet: <span>Checking...</span></div>
+          <div id="statusIP" style="display: none; margin: 4px 0;">🔢 IP Address: <span></span></div>
+        </div>
+        
+        <!-- Device List -->
         <div id="trustedDevicesList" style="margin-bottom: 12px;"></div>
         
         <!-- Scan Button (always shown in trusted devices area) -->
-        <button class="success" onclick="scanDevices()" id="scanBtn" style="width: 100%; margin: 0;">
+        <button class="success" onclick="scanDevices()" id="scanBtn" style="width: 100%; margin: 0 0 12px 0;">
           🔍 Scan for Devices
         </button>
         
         <!-- Discovered Devices List -->
-        <div id="scanResults" style="display: none; margin-top: 12px;">
+        <div id="scanResults" style="display: none; margin-bottom: 12px;">
           <h5 style="margin: 0 0 8px 0; color: #8b949e;">Discovered Devices:</h5>
           <div id="scanStatus" style="color: #8b949e; margin: 8px 0; font-size: 13px;">Scanning...</div>
           <div id="deviceList"></div>
@@ -160,7 +168,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
       
       <!-- Output Section (shown above connect button) -->
-      <div style="margin-bottom: 12px;">
+      <div style="margin-bottom: 12px; margin-top: 16px; padding-top: 16px; border-top: 1px solid #30363d;">
         <h4 style="margin: 0 0 8px 0; color: #8b949e; font-size: 14px;">📋 Output</h4>
         <div id="logViewer">
           <div style="background: #0d1117; color: #d4d4d4; padding: 12px; padding-right: 16px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; line-height: 1.5;" id="logContent">
@@ -183,13 +191,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             background: #484f58;
           }
         </style>
-      </div>
-      
-      <!-- Connect/Disconnect Actions -->
-      <div id="connectActions">
-        <button class="success" onclick="quickConnect()" id="quickConnectBtn" style="width: 100%; margin: 0 0 8px 0;">
-          ⚡ Connect to Phone
-        </button>
       </div>
     </div>
     
@@ -236,11 +237,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           `🌐 Internet: <span style="color: #8b949e;">🔄 Initializing...</span>`;
         
         document.getElementById('statusIP').style.display = 'none';
-        document.getElementById('statusActiveConnection').style.display = 'none';
-        
-        const connectBtn = document.getElementById('quickConnectBtn');
-        connectBtn.disabled = true;
-        connectBtn.innerHTML = '<span class="spinner"></span> Initializing...';
       }
 
       async function checkConnectionStatus() {
@@ -262,8 +258,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             console.error('Failed to get backend status:', err);
           }
           
-          const connectBtn = document.getElementById('quickConnectBtn');
-          connectBtn.style.display = 'none';
           document.getElementById("statusPaired").innerHTML = 
             `📱 Paired: <span style="color: #f48771;">✗ No</span>`;
           
@@ -277,7 +271,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             `🌐 Internet: <span style="color: #f48771;">✗ Not Active</span>`;
           
           document.getElementById('statusIP').style.display = 'none';
-          document.getElementById('statusActiveConnection').style.display = 'none';
           
           return;
         }
@@ -318,7 +311,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             `🌐 Internet: <span style="color: #f0883e;">⏳ Disconnecting...</span>`;
           
           document.getElementById('statusIP').style.display = 'none';
-          document.getElementById('statusActiveConnection').style.display = 'none';
           
           // Hide test card during disconnect
           const testInternetCard = document.getElementById('testInternetCard');
@@ -361,45 +353,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           statusIPElement.innerHTML = `🔢 IP Address: <span style="color: #4ec9b0;">${data.ip_address}</span>`;
         } else {
           statusIPElement.style.display = 'none';
-        }
-        
-        const statusActiveConnection = document.getElementById('statusActiveConnection');
-        
-        if (data.default_route_interface) {
-          const isUsingBluetooth = data.default_route_interface === data.interface;
-          
-          // Determine connection type and details
-          let connType = 'Unknown';
-          let connEmoji = '🔌';
-          let connDetails = '';
-          
-          if (data.default_route_interface.startsWith('usb')) {
-            connType = 'USB Tethering';
-            connEmoji = '🔌';
-            if (data.pan_active && !isUsingBluetooth) {
-              connDetails = '<div style="color: #ce9178; margin-top: 4px; font-size: 11px;">💡 Bluetooth is on standby • USB has priority due to higher speed</div>';
-            }
-          } else if (data.default_route_interface.startsWith('bnep')) {
-            connType = 'Bluetooth Tethering';
-            connEmoji = '📱';
-          } else if (data.default_route_interface.startsWith('eth')) {
-            connType = 'Ethernet';
-            connEmoji = '🌐';
-            if (data.pan_active) {
-              connDetails = '<div style="color: #ce9178; margin-top: 4px; font-size: 11px;">💡 Bluetooth is on standby • Ethernet is active</div>';
-            }
-          } else if (data.default_route_interface.startsWith('wlan')) {
-            connType = 'Wi-Fi';
-            connEmoji = '📶';
-            if (data.pan_active) {
-              connDetails = '<div style="color: #ce9178; margin-top: 4px; font-size: 11px;">💡 Bluetooth is on standby • Wi-Fi is active</div>';
-            }
-          }
-          
-          statusActiveConnection.style.display = 'block';
-          statusActiveConnection.innerHTML = `${connEmoji} <span style="color: #4ec9b0; font-weight: bold;">${connType}</span> <span style="color: #888;">(${data.default_route_interface})</span>${connDetails}`;
-        } else {
-          statusActiveConnection.style.display = 'none';
         }
         
         // Manage polling based on connection state
@@ -447,27 +400,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             statusInterval._interval = 30000;
           }
         }
-        
-        const connectBtn = document.getElementById('quickConnectBtn');
-        
-        const operationInProgress = statusData.disconnecting || statusData.untrusting || statusData.connection_in_progress || statusData.status === 'PAIRING' || statusData.status === 'TRUSTING' || statusData.status === 'CONNECTING' || statusData.status === 'RECONNECTING';
-        
-        if (statusData.disconnecting || statusData.untrusting) {
-          connectBtn.style.display = 'none';
-        } else if (statusData.status === 'PAIRING' || statusData.status === 'TRUSTING' || statusData.status === 'CONNECTING' || statusData.status === 'RECONNECTING') {
-          connectBtn.disabled = true;
-          connectBtn.innerHTML = '<span class="spinner"></span> Connecting...';
-          connectBtn.style.display = 'block';
-        } else {
-          connectBtn.disabled = false;
-          connectBtn.innerHTML = '⚡ Connect to Phone';
-          
-          if (data.paired && data.trusted && !data.connected) {
-            connectBtn.style.display = 'block';
-          } else {
-            connectBtn.style.display = 'none';
-          }
-        }
+
         
         if (!window.lastStatusUpdate || 
             (window.lastStatusUpdate.connected !== (statusData.mac && data.connected)) ||
@@ -491,39 +424,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           statusInterval = null;
         }
       }
-
-      async function quickConnect() {
-        const mac = macInput.value.trim();
-        if (!mac || !/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(mac)) {
-          showFeedback("Please enter your phone's MAC address first!", "warning");
-          return;
-        }
-
-        const quickConnectBtn = document.getElementById('quickConnectBtn');
-        quickConnectBtn.disabled = true;
-        quickConnectBtn.innerHTML = '<span class="spinner"></span> Connecting...';
-        
-        showFeedback("Connecting to phone... Watch for pairing dialog!", "info");
-        
-        try {
-          const response = await fetch(`/plugins/bt-tether-helper/connect?mac=${encodeURIComponent(mac)}`, { method: 'GET' });
-          const data = await response.json();
-          
-          if (data.success) {
-            showFeedback("Connection started! Check your phone for the pairing dialog.", "success");
-            startStatusPolling();
-          } else {
-            showFeedback("Connection failed: " + data.message, "error");
-            quickConnectBtn.disabled = false;
-            quickConnectBtn.innerHTML = '⚡ Connect to Phone';
-          }
-        } catch (error) {
-          showFeedback("Connection failed: " + error.message, "error");
-          quickConnectBtn.disabled = false;
-          quickConnectBtn.innerHTML = '⚡ Connect to Phone';
-        }
-      }
-
       async function scanDevices() {
         const scanBtn = document.getElementById('scanBtn');
         const scanResults = document.getElementById('scanResults');
@@ -679,36 +579,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           const response = await fetch('/plugins/bt-tether-helper/trusted-devices');
           const data = await response.json();
           
-          // Display last connected device
-          const lastConnectedDisplay = document.getElementById('lastConnectedDisplay');
-          if (statusData.last_connected_name && lastConnectedDisplay) {
-            lastConnectedDisplay.style.display = 'block';
-            lastConnectedDisplay.innerHTML = `⏱️ Last Connected: ${statusData.last_connected_name}`;
-          } else if (lastConnectedDisplay) {
-            lastConnectedDisplay.style.display = 'none';
-          }
-          
           if (data.devices && data.devices.length > 0) {
             const napDevices = data.devices.filter(d => d.has_nap);
             const connectedDevice = napDevices.find(d => d.connected);
-            const deviceNameDisplay = document.getElementById('deviceNameDisplay');
-            
-            if (napDevices.length > 0) {
-              const firstDevice = napDevices[0];
-              if (deviceNameDisplay) {
-                deviceNameDisplay.style.display = 'block';
-                deviceNameDisplay.innerHTML = `📱 Device: ${firstDevice.name}`;
-              }
-            } else {
-              if (deviceNameDisplay) {
-                deviceNameDisplay.style.display = 'none';
-              }
-            }
-            
-            if (connectedDevice && statusConnectedDiv) {
-              // Keep the status display consistent - don't override with device name
-              // Device name is shown in the deviceNameDisplay instead
-            }
             
             if (trustedDevicesSection) {
               trustedDevicesSection.style.display = 'block';
@@ -753,7 +626,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                   <small style="color: #888;">${device.mac}${connectionDetails}</small>
                 </div>
                 <div style="display: flex; gap: 8px;">
-                  ${!device.connected ? `<button onclick="switchToDevice('${device.mac}', '${device.name.replace(/'/g, "\\'")}'); return false;" class="success" style="margin: 0; min-width: 80px;" ${buttonsDisabled}>${buttonText}</button>` : ''}
+                  ${!device.connected ? `<button onclick="switchToDevice('${device.mac}', '${device.name.replace(/'/g, "\\'")}', this); return false;" class="success" style="margin: 0; min-width: 80px;" ${buttonsDisabled}>${buttonText}</button>` : ''}
                   <button onclick="untrustDevice('${device.mac}', '${device.name.replace(/'/g, "\\'")}'); return false;" class="danger" style="margin: 0; min-width: 80px;" ${buttonsDisabled}>🔓 Untrust</button>
                 </div>
               `;
@@ -776,10 +649,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }
             if (trustedDevicesList) {
               trustedDevicesList.innerHTML = '';
-            }
-            const deviceNameDisplay = document.getElementById('deviceNameDisplay');
-            if (deviceNameDisplay) {
-              deviceNameDisplay.style.display = 'none';
             }
             if (isConnecting && statusData.status !== 'CONNECTED') {
               if (summaryDiv) {
@@ -863,11 +732,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           scanCard.style.display = 'none';
         }
         
-        const connectBtn = document.getElementById('quickConnectBtn');
-        connectBtn.style.display = 'block';
-        connectBtn.disabled = true;
-        connectBtn.innerHTML = '<span class="spinner"></span> Connecting...';
-        
         try {
           const response = await fetch(`/plugins/bt-tether-helper/pair-device?mac=${encodeURIComponent(mac)}&name=${encodeURIComponent(name)}`, { method: 'GET' });
           const data = await response.json();
@@ -892,13 +756,9 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             }, 2000);
           } else {
             showFeedback(`Pairing failed: ${data.message}`, "error");
-            connectBtn.disabled = false;
-            connectBtn.innerHTML = '⚡ Connect to Phone';
           }
         } catch (error) {
           showFeedback(`Pairing failed: ${error.message}`, "error");
-          connectBtn.disabled = false;
-          connectBtn.innerHTML = '⚡ Connect to Phone';
         }
       }
 
@@ -973,31 +833,45 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
       }
 
-      async function switchToDevice(mac, name) {
+      async function switchToDevice(mac, name, buttonElement) {
         if (!confirm(`Switch to ${name}?\n\nThis will disconnect the current device and connect to ${name}.`)) {
           return;
         }
         
         showFeedback(`Switching to ${name}...`, "info");
         
-        try {
-          const response = await fetch(`/plugins/bt-tether-helper/switch-device?mac=${encodeURIComponent(mac)}`, { method: 'GET' });
-          const data = await response.json();
+        // Disable all device action buttons
+        const allButtons = document.querySelectorAll('.device-item button');
+        allButtons.forEach(btn => btn.disabled = true);
+        
+        // Show loader on clicked button
+        if (buttonElement) {
+          const originalHTML = buttonElement.innerHTML;
+          buttonElement.innerHTML = '<span class="spinner"></span> Switching...';
           
-          if (data.success) {
-            showFeedback(`Switching to ${name}... This may take a moment.`, "success");
+          try {
+            const response = await fetch(`/plugins/bt-tether-helper/switch-device?mac=${encodeURIComponent(mac)}`, { method: 'GET' });
+            const data = await response.json();
             
-            macInput.value = mac;
-            
-            startStatusPolling();
-            
-            setTimeout(loadTrustedDevicesSummary, 2000);
-            setTimeout(checkConnectionStatus, 1000);
-          } else {
-            showFeedback(`Switch failed: ${data.message}`, "error");
+            if (data.success) {
+              showFeedback(`Switching to ${name}... This may take a moment.`, "success");
+              
+              macInput.value = mac;
+              
+              startStatusPolling();
+              
+              setTimeout(loadTrustedDevicesSummary, 2000);
+              setTimeout(checkConnectionStatus, 1000);
+            } else {
+              showFeedback(`Switch failed: ${data.message}`, "error");
+              buttonElement.innerHTML = originalHTML;
+              allButtons.forEach(btn => btn.disabled = false);
+            }
+          } catch (error) {
+            showFeedback(`Switch failed: ${error.message}`, "error");
+            buttonElement.innerHTML = originalHTML;
+            allButtons.forEach(btn => btn.disabled = false);
           }
-        } catch (error) {
-          showFeedback(`Switch failed: ${error.message}`, "error");
         }
       }
 
@@ -1436,6 +1310,13 @@ class BTTetherHelper(Plugin):
         )
         self._first_failure_time = None
         self._user_requested_disconnect = False
+
+        # Device rotation tracking for switching between multiple devices on reconnection
+        self._device_rotation_list = []  # List of available devices to cycle through
+        self._current_device_index = 0  # Index of current device in rotation list
+        self._devices_tried_in_cycle = (
+            set()
+        )  # Set of device MACs tried in current failure cycle
 
         self._screen_needs_refresh = False
         self._ui_update_active = False
@@ -2318,84 +2199,128 @@ default-agent
                         # Reset failure counter on successful connection
                         self._reconnect_failure_count = 0
                         self._first_failure_time = None
+                        self._device_rotation_list = []
+                        self._current_device_index = 0
+                        self._devices_tried_in_cycle = set()
                         # Update phone_mac to the successful device
                         self.phone_mac = current_mac
                     else:
-                        # Increment failure counter
+                        # Device reconnection failed - mark this device as tried in this cycle
+                        self._devices_tried_in_cycle.add(current_mac.upper())
                         self._reconnect_failure_count += 1
+
                         # Track when failures started
                         if self._first_failure_time is None:
                             self._first_failure_time = time.time()
+
                         # Update cached UI to show disconnected state after failure
                         self._update_cached_ui_status(mac=current_mac)
 
-                        # FALLBACK: Try other trusted devices if last_connected_mac failed
-                        if (
-                            self._reconnect_failure_count == 1
-                            and self._last_connected_mac
-                        ):
-                            # First failure with last connected device - try alternatives
-                            trusted_devices = self._get_trusted_devices()
-                            nap_devices = [d for d in trusted_devices if d["has_nap"]]
+                        # DEVICE SWITCHING: When reconnection fails, try other trusted devices
+                        trusted_devices = self._get_trusted_devices()
+                        nap_devices = [d for d in trusted_devices if d["has_nap"]]
 
-                            # Find alternative devices (not the one that just failed)
-                            alternative_devices = [
+                        # Build rotation list if we have multiple devices and haven't done so yet
+                        if len(nap_devices) > 1 and not self._device_rotation_list:
+                            # Create rotation list of all devices except the currently failing one
+                            self._device_rotation_list = [
                                 d
                                 for d in nap_devices
                                 if d["mac"].upper() != current_mac.upper()
                                 and not d["connected"]
                             ]
+                            if self._device_rotation_list:
+                                device_names = [
+                                    d["name"] for d in self._device_rotation_list
+                                ]
+                                self._log(
+                                    "INFO",
+                                    f"Multiple devices found. Will switch between: {', '.join(device_names)}",
+                                )
 
-                            if alternative_devices:
-                                alt_device = alternative_devices[0]
+                        # Try next device in rotation if available and we haven't tried all yet
+                        if self._device_rotation_list and len(
+                            self._devices_tried_in_cycle
+                        ) <= len(nap_devices):
+                            # Find next untried device in rotation
+                            next_device = None
+                            for device in self._device_rotation_list:
+                                if (
+                                    device["mac"].upper()
+                                    not in self._devices_tried_in_cycle
+                                ):
+                                    next_device = device
+                                    break
+
+                            if next_device:
                                 self._log(
                                     "WARNING",
-                                    f"Reconnection to {device_name} failed. Trying alternative device: {alt_device['name']}",
+                                    f"Reconnection to {device_name} failed. Switching to {next_device['name']}...",
                                 )
-                                # Try the alternative device
+                                # Add cleanup delay to allow BlueZ to release resources
+                                self._log(
+                                    "INFO",
+                                    "Waiting for device cleanup before switching...",
+                                )
+                                time.sleep(2.0)
+
+                                # Try the next device
                                 with self.lock:
                                     self.status = self.STATE_CONNECTING
                                     self.message = (
-                                        f"Reconnecting to {alt_device['name']}..."
+                                        f"Switching to {next_device['name']}..."
                                     )
                                     self._connection_in_progress = True
                                     self._connection_start_time = time.time()
                                     self._screen_needs_refresh = True
 
-                                alt_success = self._reconnect_device_with_mac(
-                                    alt_device["mac"]
+                                next_success = self._reconnect_device_with_mac(
+                                    next_device["mac"]
                                 )
-                                if alt_success:
+                                if next_success:
                                     self._log(
                                         "INFO",
-                                        f"✓ Connected to alternative device {alt_device['name']}",
+                                        f"✓ Connected to {next_device['name']}",
                                     )
                                     self._reconnect_failure_count = 0
                                     self._first_failure_time = None
-                                    self.phone_mac = alt_device["mac"]
-                                    self._last_connected_mac = alt_device["mac"]
-                                    self._last_connected_name = alt_device["name"]
+                                    self._device_rotation_list = []
+                                    self._current_device_index = 0
+                                    self._devices_tried_in_cycle = set()
+                                    self.phone_mac = next_device["mac"]
+                                    self._last_connected_mac = next_device["mac"]
+                                    self._last_connected_name = next_device["name"]
                                     self._update_cached_ui_status(
                                         status=self._get_full_connection_status(
-                                            alt_device["mac"]
+                                            next_device["mac"]
                                         ),
-                                        mac=alt_device["mac"],
+                                        mac=next_device["mac"],
                                     )
-                                    # Skip the normal failure handling since we succeeded with alternative
                                 else:
                                     self._log(
                                         "WARNING",
-                                        f"Alternative device {alt_device['name']} also failed",
+                                        f"{next_device['name']} also failed to connect",
                                     )
-                                    # Continue with normal failure handling
+                                    # Mark this device as tried and will try next one on next iteration
+                                    self._devices_tried_in_cycle.add(
+                                        next_device["mac"].upper()
+                                    )
+
+                        # Check if we've tried all devices or exceeded max failures
+                        all_devices_tried = (
+                            len(self._devices_tried_in_cycle) >= len(nap_devices)
+                            if nap_devices
+                            else False
+                        )
 
                         if (
                             self._reconnect_failure_count
                             >= self._max_reconnect_failures
+                            or all_devices_tried
                         ):
                             self._log(
                                 "WARNING",
-                                f"⚠️  Auto-reconnect paused after {self._max_reconnect_failures} failed attempts",
+                                f"⚠️  Auto-reconnect paused after {self._reconnect_failure_count} failed attempts",
                             )
                             self._log(
                                 "INFO",
@@ -2404,10 +2329,11 @@ default-agent
                             with self.lock:
                                 self.status = self.STATE_DISCONNECTED
                                 self.message = f"Auto-reconnect paused - retrying in {self._reconnect_failure_cooldown}s"
-                                self._connection_in_progress = (
-                                    False  # Clear flag to show proper status
-                                )
+                                self._connection_in_progress = False
                                 self._screen_needs_refresh = True
+                            # Reset device rotation for next cycle
+                            self._device_rotation_list = []
+                            self._devices_tried_in_cycle = set()
                 elif self._reconnect_failure_count >= self._max_reconnect_failures:
                     # Already exceeded max failures - check if cooldown period has elapsed
                     if self._first_failure_time:
@@ -2422,11 +2348,17 @@ default-agent
                             )
                             self._reconnect_failure_count = 0
                             self._first_failure_time = None
+                            self._device_rotation_list = []
+                            self._current_device_index = 0
+                            self._devices_tried_in_cycle = set()
                 elif not status["paired"] or not status["trusted"]:
                     # Device not paired/trusted (or blocked), don't attempt auto-reconnect
                     # Reset failure counter since this is intentional
                     self._reconnect_failure_count = 0
                     self._first_failure_time = None
+                    self._device_rotation_list = []
+                    self._current_device_index = 0
+                    self._devices_tried_in_cycle = set()
                     logging.debug(
                         f"[bt-tether-helper] Device not ready for auto-reconnect (paired={status['paired']}, trusted={status['trusted']})"
                     )
@@ -2718,6 +2650,14 @@ default-agent
                 self._connection_start_time = time.time()
 
             self._log("INFO", f"Attempting to reconnect to {mac}...")
+
+            # Cleanup any existing PAN connections to avoid br-connection-busy
+            # This is especially important when switching between devices
+            try:
+                self._run_cmd(["pand", "--kill"], capture=True, timeout=5)
+                time.sleep(0.5)
+            except:
+                pass  # pand might not be running
 
             # Check if device is blocked
             devices_output = self._run_cmd(
@@ -3545,6 +3485,10 @@ default-agent
             with self.lock:
                 self._disconnecting = False
                 self._disconnect_start_time = None
+                # Reset device rotation for next reconnection cycle
+                self._device_rotation_list = []
+                self._current_device_index = 0
+                self._devices_tried_in_cycle = set()
                 self._untrusting = False
                 self._untrust_start_time = None
 
@@ -6457,7 +6401,6 @@ default-agent
                 return True
             except dbus.exceptions.DBusException as dbus_err:
                 error_msg = str(dbus_err)
-                logging.error(f"[bt-tether-helper] NAP connection failed: {error_msg}")
 
                 # Provide helpful error messages
                 if "NotAvailable" in error_msg or "profile-unavailable" in error_msg:
