@@ -128,6 +128,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <!-- Status in output style -->
       <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
         <div id="deviceNameDisplay" style="display: none; margin: 0 0 12px 0; padding: 8px; background: rgba(88, 166, 255, 0.1); border-left: 3px solid #58a6ff; border-radius: 3px; font-size: 13px; font-weight: bold; color: #58a6ff;"></div>
+        <div id="lastConnectedDisplay" style="display: none; margin: 0 0 12px 0; padding: 8px; background: rgba(78, 201, 176, 0.1); border-left: 3px solid #4ec9b0; border-radius: 3px; font-size: 13px; font-weight: bold; color: #4ec9b0;"></div>
         <div style="color: #888; margin-bottom: 8px;">Connection Status:</div>
         <div id="statusActiveConnection" style="display: none; margin: 4px 0; padding: 8px; background: rgba(78, 201, 176, 0.1); border-left: 3px solid #4ec9b0; margin-bottom: 8px;"></div>
         <div id="statusPaired" style="margin: 4px 0;">📱 Paired: <span>Checking...</span></div>
@@ -677,6 +678,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           
           const response = await fetch('/plugins/bt-tether-helper/trusted-devices');
           const data = await response.json();
+          
+          // Display last connected device
+          const lastConnectedDisplay = document.getElementById('lastConnectedDisplay');
+          if (statusData.last_connected_name && lastConnectedDisplay) {
+            lastConnectedDisplay.style.display = 'block';
+            lastConnectedDisplay.innerHTML = `⏱️ Last Connected: ${statusData.last_connected_name}`;
+          } else if (lastConnectedDisplay) {
+            lastConnectedDisplay.style.display = 'none';
+          }
           
           if (data.devices && data.devices.length > 0) {
             const napDevices = data.devices.filter(d => d.has_nap);
@@ -1270,6 +1280,10 @@ class BTTetherHelper(Plugin):
     BLUETOOTH_SERVICE_STARTUP_DELAY = 3
     MONITOR_INITIAL_DELAY = 5
     MONITOR_PAUSED_CHECK_INTERVAL = 10
+
+    # Bluetooth Service UUIDs
+    NAP_UUID = "00001116-0000-1000-8000-00805f9b34fb"  # Network Access Point service
+
     SCAN_DURATION = 30
     SCAN_DISCOVERY_WAIT = 1
     SCAN_DISCOVERY_MAX_ATTEMPTS = 60
@@ -1289,7 +1303,7 @@ class BTTetherHelper(Plugin):
     DHCP_KILL_WAIT = 0.5  # Wait after killing dhclient
     DHCP_RELEASE_WAIT = 1  # Wait after releasing DHCP lease
     PHONE_READY_WAIT = 3  # Wait for phone to be ready after pairing/trust
-    NAP_RETRY_DELAY = 3  # Wait between NAP connection retries
+    NAP_RETRY_DELAY = 5  # Wait between NAP connection retries (increased from 3s to allow BlueZ cleanup)
     NETWORK_STABILIZE_WAIT = 2  # Wait for network to stabilize
     DHCLIENT_TIMEOUT = 30  # Timeout for dhclient DHCP request
     DHCPCD_TIMEOUT = 20  # Timeout for dhcpcd DHCP request
@@ -1355,7 +1369,8 @@ class BTTetherHelper(Plugin):
         from collections import deque
 
         self.phone_mac = ""
-        self._last_connected_mac = None  # Track last successfully connected device
+        self._last_connected_mac = None  # Track last successfully connected device MAC
+        self._last_connected_name = None  # Track last successfully connected device NAME (more reliable than MAC)
         self._status = self.STATE_IDLE
         self._message = "Ready"
         self._scanning = False
@@ -2308,6 +2323,67 @@ default-agent
                             self._first_failure_time = time.time()
                         # Update cached UI to show disconnected state after failure
                         self._update_cached_ui_status(mac=current_mac)
+
+                        # FALLBACK: Try other trusted devices if last_connected_mac failed
+                        if (
+                            self._reconnect_failure_count == 1
+                            and self._last_connected_mac
+                        ):
+                            # First failure with last connected device - try alternatives
+                            trusted_devices = self._get_trusted_devices()
+                            nap_devices = [d for d in trusted_devices if d["has_nap"]]
+
+                            # Find alternative devices (not the one that just failed)
+                            alternative_devices = [
+                                d
+                                for d in nap_devices
+                                if d["mac"].upper() != current_mac.upper()
+                                and not d["connected"]
+                            ]
+
+                            if alternative_devices:
+                                alt_device = alternative_devices[0]
+                                self._log(
+                                    "WARNING",
+                                    f"Reconnection to {device_name} failed. Trying alternative device: {alt_device['name']}",
+                                )
+                                # Try the alternative device
+                                with self.lock:
+                                    self.status = self.STATE_CONNECTING
+                                    self.message = (
+                                        f"Reconnecting to {alt_device['name']}..."
+                                    )
+                                    self._connection_in_progress = True
+                                    self._connection_start_time = time.time()
+                                    self._screen_needs_refresh = True
+
+                                alt_success = self._reconnect_device_with_mac(
+                                    alt_device["mac"]
+                                )
+                                if alt_success:
+                                    self._log(
+                                        "INFO",
+                                        f"✓ Connected to alternative device {alt_device['name']}",
+                                    )
+                                    self._reconnect_failure_count = 0
+                                    self._first_failure_time = None
+                                    self.phone_mac = alt_device["mac"]
+                                    self._last_connected_mac = alt_device["mac"]
+                                    self._last_connected_name = alt_device["name"]
+                                    self._update_cached_ui_status(
+                                        status=self._get_full_connection_status(
+                                            alt_device["mac"]
+                                        ),
+                                        mac=alt_device["mac"],
+                                    )
+                                    # Skip the normal failure handling since we succeeded with alternative
+                                else:
+                                    self._log(
+                                        "WARNING",
+                                        f"Alternative device {alt_device['name']} also failed",
+                                    )
+                                    # Continue with normal failure handling
+
                         if (
                             self._reconnect_failure_count
                             >= self._max_reconnect_failures
@@ -2361,16 +2437,47 @@ default-agent
     def _reconnect_device(self):
         """Attempt to reconnect to a previously paired device"""
         try:
-            # Find best device if no MAC is set
-            if not self.phone_mac:
+            # Always prioritize last connected device for auto-reconnection
+            # This ensures we connect back to the device we were using before
+            if self._last_connected_mac:
+                # Try to find the last connected device
+                try:
+                    status = self._check_pair_status(self._last_connected_mac)
+                    if status["paired"] and status["trusted"]:
+                        mac = self._last_connected_mac
+                        self._log("INFO", f"Using last connected device: {mac}")
+                    else:
+                        # Last device is no longer paired/trusted, find best alternative
+                        self._log(
+                            "WARNING",
+                            f"Last connected device {self._last_connected_mac} is no longer paired/trusted, finding alternative...",
+                        )
+                        best_device = self._find_best_device_to_connect()
+                        if not best_device:
+                            self._log(
+                                "DEBUG", "No trusted devices found for reconnection"
+                            )
+                            return False
+                        mac = best_device["mac"]
+                except Exception as e:
+                    self._log(
+                        "WARNING",
+                        f"Error checking last connected device: {e}, finding alternative...",
+                    )
+                    best_device = self._find_best_device_to_connect()
+                    if not best_device:
+                        self._log("DEBUG", "No trusted devices found for reconnection")
+                        return False
+                    mac = best_device["mac"]
+            else:
+                # No last connected device, find best available
                 best_device = self._find_best_device_to_connect()
                 if not best_device:
                     self._log("DEBUG", "No trusted devices found for reconnection")
                     return False
                 mac = best_device["mac"]
-                self.phone_mac = mac
-            else:
-                mac = self.phone_mac
+
+            self.phone_mac = mac
 
             # Set flag to prevent concurrent operations
             with self.lock:
@@ -2433,6 +2540,23 @@ default-agent
 
                         # Remember this device as last successfully connected
                         self._last_connected_mac = mac
+                        # Get device name from best_device if available
+                        if best_device and "name" in best_device:
+                            self._last_connected_name = best_device["name"]
+                        else:
+                            device_info = self._run_cmd(
+                                ["bluetoothctl", "info", mac], capture=True, timeout=5
+                            )
+                            if device_info:
+                                import re
+
+                                name_match = re.search(
+                                    r"Name: (.+)$", device_info, re.MULTILINE
+                                )
+                                if name_match:
+                                    self._last_connected_name = name_match.group(
+                                        1
+                                    ).strip()
 
                         # Get IP address and send Discord notification if configured
                         try:
@@ -2509,20 +2633,27 @@ default-agent
                         return True
                 else:
                     logging.warning(
-                        f"[bt-tether-helper] NAP connected but no interface detected"
+                        f"[bt-tether-helper] NAP connected but no interface detected - treating as connection failure"
                     )
-                    # Update cached UI status FIRST while flag is still True
-                    self._update_cached_ui_status(mac=mac)
+                    # NAP reported success but PAN interface never appeared
+                    # This is a real failure - disconnect and try again
+                    try:
+                        device = dbus.Interface(
+                            bus.get_object("org.bluez", device_path),
+                            "org.bluez.Device1",
+                        )
+                        device.Disconnect(timeout=5)
+                    except:
+                        pass
 
-                    # Then update status and clear flags
                     with self.lock:
-                        self.status = self.STATE_CONNECTED
-                        self.message = "Reconnected but no PAN interface"
+                        self.status = self.STATE_DISCONNECTED
+                        self.message = "NAP profile didn't create interface"
                         self._connection_in_progress = False
                         self._connection_start_time = None
                         self._initializing = False
                         self._screen_needs_refresh = True
-                    return True
+                    return False
             else:
                 logging.warning(f"[bt-tether-helper] Reconnection failed")
                 with self.lock:
@@ -2565,6 +2696,95 @@ default-agent
                 },
                 mac=mac,
             )
+            return False
+        finally:
+            # Ensure flags are cleared
+            with self.lock:
+                if self._connection_in_progress:
+                    self._connection_in_progress = False
+                    self._connection_start_time = None
+
+    def _reconnect_device_with_mac(self, mac):
+        """Attempt to reconnect to a specific device by MAC address (used for fallback reconnection)"""
+        try:
+            # Set flag to prevent concurrent operations
+            with self.lock:
+                self._connection_in_progress = True
+                self._connection_start_time = time.time()
+
+            self._log("INFO", f"Attempting to reconnect to {mac}...")
+
+            # Check if device is blocked
+            devices_output = self._run_cmd(
+                ["bluetoothctl", "devices", "Blocked"], capture=True, timeout=5
+            )
+            if devices_output and devices_output != "Timeout" and mac in devices_output:
+                self._log("INFO", f"Unblocking device {mac}...")
+                self._run_cmd(["bluetoothctl", "unblock", mac], capture=True)
+                time.sleep(self.DEVICE_OPERATION_DELAY)
+
+            # Trust the device
+            self._log("INFO", f"Ensuring device is trusted...")
+            self._run_cmd(["bluetoothctl", "trust", mac], capture=True)
+            time.sleep(self.DEVICE_OPERATION_DELAY)
+
+            # Try NAP connection
+            self._log("INFO", f"Attempting NAP connection...")
+            nap_connected = self._connect_nap_dbus(mac)
+
+            if nap_connected:
+                self._log("INFO", f"✓ Reconnection successful")
+
+                # Wait for PAN interface
+                time.sleep(self.PAN_INTERFACE_WAIT)
+
+                # Check if PAN interface is up
+                if self._pan_active():
+                    iface = self._get_pan_interface()
+                    self._log("INFO", f"✓ PAN interface active: {iface}")
+
+                    # Setup network with DHCP
+                    if self._setup_network_dhcp(iface):
+                        self._log("INFO", f"✓ Network setup successful")
+
+                    # Verify internet connectivity
+                    time.sleep(self.INTERNET_VERIFY_WAIT)
+                    if self._check_internet_connectivity():
+                        self._log("INFO", f"✓ Internet connectivity verified!")
+
+                        # Remember this device as last successfully connected
+                        self._last_connected_mac = mac
+                        device_info = self._run_cmd(
+                            ["bluetoothctl", "info", mac], capture=True, timeout=5
+                        )
+                        if device_info:
+                            import re
+
+                            name_match = re.search(
+                                r"Name: (.+)$", device_info, re.MULTILINE
+                            )
+                            if name_match:
+                                self._last_connected_name = name_match.group(1).strip()
+
+                        # Update UI
+                        with self.lock:
+                            self.status = self.STATE_CONNECTED
+                            self.message = "Connected via Bluetooth tethering"
+                            self._connection_in_progress = False
+                            self._screen_needs_refresh = True
+
+                        # Update cached UI status
+                        self._update_cached_ui_status(
+                            status=self._get_full_connection_status(mac), mac=mac
+                        )
+                        return True
+
+            self._log("ERROR", f"Reconnection to {mac} failed!")
+            with self.lock:
+                self.status = self.STATE_DISCONNECTED
+                self.message = "Reconnection failed"
+                self._connection_in_progress = False
+                self._screen_needs_refresh = True
             return False
         finally:
             # Ensure flags are cleared
@@ -2688,7 +2908,7 @@ default-agent
 
             if clean_path == "trusted-devices":
                 devices = self._get_trusted_devices()
-                logging.info(
+                logging.debug(
                     f"[bt-tether-helper] Returning {len(devices)} trusted devices to web UI"
                 )
                 return jsonify({"devices": devices})
@@ -2813,11 +3033,31 @@ default-agent
 
             if clean_path == "status":
                 with self.lock:
+                    # Get last connected device name if available
+                    last_connected_name = None
+                    if self._last_connected_mac:
+                        try:
+                            device_info = self._run_cmd(
+                                ["bluetoothctl", "info", self._last_connected_mac],
+                                capture=True,
+                                timeout=2,
+                            )
+                            if device_info:
+                                name_match = re.search(r"Name:\s+(.+)", device_info)
+                                if name_match:
+                                    last_connected_name = name_match.group(1).strip()
+                        except Exception as e:
+                            logging.debug(
+                                f"[bt-tether-helper] Error getting last connected device name: {e}"
+                            )
+
                     return jsonify(
                         {
                             "status": self.status,
                             "message": self.message,
                             "mac": self.phone_mac,
+                            "last_connected_mac": self._last_connected_mac,
+                            "last_connected_name": last_connected_name,
                             "disconnecting": self._disconnecting,
                             "untrusting": self._untrusting,
                             "initializing": self._initializing,
@@ -3017,12 +3257,11 @@ default-agent
                                             break
 
                                 if device_path:
-                                    NAP_UUID = "00001116-0000-1000-8000-00805f9b34fb"
                                     device = dbus.Interface(
                                         bus.get_object("org.bluez", device_path),
                                         "org.bluez.Device1",
                                     )
-                                    device.DisconnectProfile(NAP_UUID)
+                                    device.DisconnectProfile(self.NAP_UUID)
                                     time.sleep(self.DEVICE_OPERATION_LONGER_DELAY)
                                     self._log("INFO", "NAP profile disconnected")
                             except Exception as nap_err:
@@ -3172,13 +3411,12 @@ default-agent
                             break
 
                 if device_path:
-                    NAP_UUID = "00001116-0000-1000-8000-00805f9b34fb"
                     device = dbus.Interface(
                         bus.get_object("org.bluez", device_path), "org.bluez.Device1"
                     )
                     try:
                         self._log("INFO", "Disconnecting NAP profile...")
-                        device.DisconnectProfile(NAP_UUID)
+                        device.DisconnectProfile(self.NAP_UUID)
                         time.sleep(self.DEVICE_OPERATION_DELAY)
                         self._log("INFO", "NAP profile disconnected")
                     except Exception as e:
@@ -3521,8 +3759,7 @@ default-agent
                                 "paired": "Paired: yes" in info,
                                 "connected": is_active_connection,  # Only true if providing internet
                                 "bt_connected": is_bt_connected,  # Bluetooth connection status
-                                "has_nap": "00001116-0000-1000-8000-00805f9b34fb"
-                                in info,  # NAP UUID
+                                "has_nap": self.NAP_UUID in info,  # NAP UUID
                             }
                             trusted_devices.append(device_info)
 
@@ -3560,14 +3797,26 @@ default-agent
                         )
                     return device
 
-                # Priority 2: Last successfully connected device (if still trusted)
+                # Priority 2: Last successfully connected device (search by NAME first, then MAC)
+                # Prefer name-based matching since phones randomize MAC addresses for privacy
+                if self._last_connected_name:
+                    for device in nap_devices:
+                        if device["name"].lower() == self._last_connected_name.lower():
+                            if log_results:
+                                self._log(
+                                    "INFO",
+                                    f"Using last connected device (by name): {device['name']} ({device['mac']})",
+                                )
+                            return device
+
+                # Fallback: Try to match by MAC if device name wasn't found
                 if self._last_connected_mac:
                     for device in nap_devices:
                         if device["mac"].upper() == self._last_connected_mac.upper():
                             if log_results:
                                 self._log(
                                     "INFO",
-                                    f"Using last connected device: {device['name']} ({device['mac']})",
+                                    f"Using last connected device (by MAC): {device['name']} ({device['mac']})",
                                 )
                             return device
 
@@ -4124,8 +4373,19 @@ default-agent
 
             # Try DBus connection to NAP profile (with retry for br-connection-busy)
             nap_connected = False
+            br_busy_count = 0
             for retry in range(self.NAP_CONNECTION_MAX_RETRIES):
                 if retry > 0:
+                    # Use exponential backoff for br-connection-busy errors
+                    # These indicate BlueZ/kernel needs more time to clean up
+                    retry_delay = self.NAP_RETRY_DELAY
+                    if br_busy_count > 0:
+                        retry_delay = self.NAP_RETRY_DELAY * (2 ** (br_busy_count - 1))
+                        self._log(
+                            "WARNING",
+                            f"Connection busy {br_busy_count}x - waiting {retry_delay}s before retry",
+                        )
+
                     self._log(
                         "INFO",
                         f"Retrying NAP connection (attempt {retry + 1}/{self.NAP_CONNECTION_MAX_RETRIES})...",
@@ -4133,13 +4393,32 @@ default-agent
                     with self.lock:
                         self.message = f"NAP retry {retry + 1}/{self.NAP_CONNECTION_MAX_RETRIES}..."
                         self._screen_needs_refresh = True
-                    time.sleep(self.NAP_RETRY_DELAY)
+                    time.sleep(retry_delay)
 
                 nap_connected = self._connect_nap_dbus(mac)
                 if nap_connected:
                     break
                 else:
                     self._log("WARNING", f"NAP attempt {retry + 1} failed")
+
+                    # Check if it was a br-connection-busy error
+                    # These are persistent - may need to reset pairing
+                    last_error = None
+                    if hasattr(self, "_last_nap_error"):
+                        last_error = self._last_nap_error
+
+                    if last_error and "br-connection-busy" in last_error:
+                        br_busy_count += 1
+                        if br_busy_count >= 3:
+                            self._log(
+                                "ERROR",
+                                "Persistent br-connection-busy after 3+ attempts - BlueZ may be stuck",
+                            )
+                            self._log(
+                                "ERROR",
+                                "Try: 1) Unpair from phone, 2) Toggle phone Bluetooth off/on, 3) Re-pair",
+                            )
+
                     with self.lock:
                         self.message = f"NAP attempt {retry + 1}/3 failed..."
                         self._screen_needs_refresh = True
@@ -4206,6 +4485,17 @@ default-agent
 
                         # Remember this device as last successfully connected
                         self._last_connected_mac = mac
+                        device_info = self._run_cmd(
+                            ["bluetoothctl", "info", mac], capture=True, timeout=5
+                        )
+                        if device_info:
+                            import re
+
+                            name_match = re.search(
+                                r"Name: (.+)$", device_info, re.MULTILINE
+                            )
+                            if name_match:
+                                self._last_connected_name = name_match.group(1).strip()
 
                         # Get IP address and send Discord notification if configured
                         try:
@@ -4301,13 +4591,15 @@ default-agent
                                     f"[bt-tether-helper] Error forcing UI update on no-internet: {e}"
                                 )
                 else:
-                    self._log("WARNING", "NAP connected but no interface detected")
-                    # Update cached UI status first
-                    self._update_cached_ui_status(mac=mac)
-
+                    self._log(
+                        "WARNING",
+                        "NAP connected but no interface detected - treating as connection failure",
+                    )
+                    # NAP reported success but PAN interface never appeared
+                    # This is a real failure - don't mark as connected
                     with self.lock:
-                        self.status = self.STATE_CONNECTED
-                        self.message = "Connected but no internet. Enable Bluetooth tethering on phone."
+                        self.status = self.STATE_DISCONNECTED
+                        self.message = "NAP profile didn't create interface"
                         self._connection_in_progress = False
                         self._connection_start_time = None
                         self._initializing = False
@@ -5734,8 +6026,7 @@ default-agent
                 return False
 
             # Look for NAP UUID in the UUIDs list
-            # NAP UUID: 00001116-0000-1000-8000-00805f9b34fb
-            nap_available = "00001116-0000-1000-8000-00805f9b34fb" in info
+            nap_available = self.NAP_UUID in info
 
             if nap_available:
                 logging.info(f"[bt-tether-helper] ✓ NAP service found on device {mac}")
@@ -6135,126 +6426,64 @@ default-agent
                 )
                 return False
 
-            # Connect to NAP service UUID
-            NAP_UUID = "00001116-0000-1000-8000-00805f9b34fb"
-            logging.info(
-                f"[bt-tether-helper] Connecting to NAP profile (UUID: {NAP_UUID})..."
-            )
             device = dbus.Interface(
                 bus.get_object("org.bluez", device_path), "org.bluez.Device1"
             )
 
-            # Set a timeout for the ConnectProfile call to prevent hanging
+            # Connect directly to NAP profile (don't call generic Connect() as it fails if any profile is unavailable)
+            logging.info(
+                f"[bt-tether-helper] Connecting to NAP profile (UUID: {self.NAP_UUID})..."
+            )
             try:
-                device.ConnectProfile(NAP_UUID, timeout=30)
-                logging.info(
-                    f"[bt-tether-helper] ✓ NAP profile connected successfully via DBus"
-                )
+                device.ConnectProfile(self.NAP_UUID, timeout=15)
+                logging.info(f"[bt-tether-helper] ✓ NAP profile connected successfully")
                 return True
             except dbus.exceptions.DBusException as dbus_err:
                 error_msg = str(dbus_err)
-                logging.error(
-                    f"[bt-tether-helper] DBus NAP connection failed: {dbus_err}"
-                )
+                logging.error(f"[bt-tether-helper] NAP connection failed: {error_msg}")
 
-                # Check for stuck/unresponsive states
-                if (
-                    "Authentication Rejected" in error_msg
-                    or "Connection refused" in error_msg
-                    or "br-connection-page-timeout" in error_msg
-                    or "br-connection-unknown" in error_msg
-                    or "Host is down" in error_msg
-                    or "NoReply" in error_msg
-                    or "Did not receive a reply" in error_msg
-                ):
-                    # Track failed connection attempts for NoReply errors
-                    if "NoReply" in error_msg or "Did not receive a reply" in error_msg:
-                        if not hasattr(self, "_noreply_retry_count"):
-                            self._noreply_retry_count = {}
+                # Provide helpful error messages
+                if "NotAvailable" in error_msg or "profile-unavailable" in error_msg:
+                    self._log(
+                        "ERROR",
+                        "⚠️ Bluetooth tethering NOT enabled on your phone!",
+                    )
+                    self._log(
+                        "ERROR",
+                        "Enable: Settings → Network & internet → Hotspot & tethering → Bluetooth tethering",
+                    )
+                elif "Rejected" in error_msg or "Denied" in error_msg:
+                    self._log(
+                        "ERROR",
+                        "⚠️ Phone rejected the NAP connection request",
+                    )
+                    self._log(
+                        "ERROR",
+                        "Try: Unpair from phone, disable/enable Bluetooth tethering, re-pair",
+                    )
+                elif "Timeout" in error_msg or "NoReply" in error_msg:
+                    self._log(
+                        "ERROR",
+                        "⚠️ Phone not responding to NAP request",
+                    )
+                    self._log(
+                        "ERROR",
+                        "Phone may be in low power mode or tethering is disabled",
+                    )
+                else:
+                    self._log("ERROR", f"NAP connection error: {error_msg[:100]}")
 
-                        current_count = self._noreply_retry_count.get(mac, 0) + 1
-                        self._noreply_retry_count[mac] = current_count
-
-                        self._log(
-                            "WARNING",
-                            f"⚠️  Device unresponsive to NoReply error (attempt {current_count}/3)",
-                        )
-
-                        if current_count >= 3:
-                            # After 3 retries, reduce polling frequency instead of removing pairing
-                            self._log(
-                                "INFO",
-                                "Device unresponsive after 3 retries - reducing polling frequency",
-                            )
-                            self._log(
-                                "INFO",
-                                "Keep pairing active; will retry with longer intervals",
-                            )
-                            # Reset counter for next attempt
-                            self._noreply_retry_count[mac] = 0
-                        else:
-                            self._log(
-                                "INFO",
-                                f"Will retry after {2 ** current_count} seconds",
-                            )
-                    else:
-                        # For other errors, log as unresponsive
-                        self._log(
-                            "WARNING",
-                            "⚠️  Device unresponsive or unpaired",
-                        )
-
-                # Check for common errors and provide helpful hints
-                if (
-                    "br-connection-create-socket" in error_msg
-                    or "br-connection-profile-unavailable" in error_msg
-                ):
-                    self._log(
-                        "ERROR",
-                        "⚠️  Bluetooth tethering is NOT enabled on your phone!",
-                    )
-                    self._log(
-                        "ERROR",
-                        "Go to Settings → Network & internet → Hotspot & tethering → Enable 'Bluetooth tethering'",
-                    )
-                elif "NoReply" in error_msg or "Did not receive a reply" in error_msg:
-                    self._log(
-                        "ERROR",
-                        "⚠️  Phone's Bluetooth is not responding to connection requests",
-                    )
-                    self._log(
-                        "ERROR",
-                        "📱 On your phone: Forget/unpair this device in Bluetooth settings",
-                    )
-                    self._log(
-                        "ERROR",
-                        "🔄 Then toggle Bluetooth tethering OFF and back ON",
-                    )
-                    self._log(
-                        "ERROR",
-                        "🔌 Finally, reconnect from the web UI to re-pair",
-                    )
-                elif "br-connection-busy" in error_msg or "InProgress" in error_msg:
-                    self._log(
-                        "ERROR",
-                        "⚠️  Bluetooth connection is busy, wait a moment and try again",
-                    )
-
+                # Store the error for debugging
+                self._last_nap_error = error_msg
                 return False
 
         except ImportError as e:
             logging.error(f"[bt-tether-helper] python3-dbus not installed: {e}")
-            logging.error(
-                "[bt-tether-helper] Run: sudo apt-get install -y python3-dbus"
-            )
             return False
         except Exception as e:
-            error_msg = str(e)
             logging.error(
                 f"[bt-tether-helper] NAP connection error: {type(e).__name__}: {e}"
             )
-
-            logging.error(f"[bt-tether-helper] Traceback: {traceback.format_exc()}")
             return False
 
     def _get_interface_type(self, interface):

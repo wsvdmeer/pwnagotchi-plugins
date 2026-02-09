@@ -20,6 +20,7 @@
   - ✅ Parse "NEW Device MAC Name" and "CHG Device MAC Name" events from output
   - ❌ **Do NOT** use `bluetoothctl devices` - that only shows cached/known devices, not NEW discoveries
   - **Device Parsing**: Use regex pattern to extract MAC addresses from scan output
+
     ```python
     mac_pattern = re.compile(
         r"([0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2})"
@@ -32,6 +33,7 @@
     - Validates MAC address format (HH:HH:HH:HH:HH:HH)
     - Robust against formatting variations in scan output
     - Prevents invalid MAC addresses from being processed
+
   - **Output format**: `NEW Device XX:XX:XX:XX:XX:XX Device Name`
   - Device discovery is slow on RPi - expect 10-15 second scan duration per device
   - Line-buffered output with select() prevents blocking while still capturing results
@@ -159,6 +161,12 @@ Before making changes, test on actual RPi:
 - Logs appear in: Pwnagotchi's main log (check with `pwnagotchi` command or `/tmp/pwnagotchi.log`)
 - Config: `/etc/pwnagotchi/config.toml`
 - Test in place: No need to reinstall, just reload the plugin
+
+### Development Assumptions
+
+- **Bluetooth Tethering**: Always assume BT tethering is enabled and working on the target phone
+  - If "profile-unavailable" errors occur, it's likely a BlueZ discovery timing issue, not missing tethering
+  - Do NOT suggest disabling/re-enabling tethering as the first diagnostic step
 
 ---
 
