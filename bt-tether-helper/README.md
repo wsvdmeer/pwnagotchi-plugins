@@ -4,7 +4,7 @@
 >
 > **⚠️ Warning:** Do not enable both this plugin and the default bt-tether.py at the same time. Only one Bluetooth tethering plugin should be active to avoid conflicts.
 
-> **✅ Important:** This plugin has been tested on **Android 15** and **iOS 26.1** (both support MAC address randomization) with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
+> **✅ Important:** This plugin has been tested on **Android 15 & 16** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3) and [v2.9.5.4](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.4). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
 >
 > **🆕 No manual MAC configuration required!** The web UI can scan, pair, and manage devices automatically. MAC randomization is handled for both iOS and Android. Manual MAC entry is not needed for normal use.
 
@@ -376,6 +376,47 @@ When your device connects, you'll receive a notification with the IP address and
 - Manual restart: `sudo systemctl restart bluetooth`
 - Check logs: `pwnlog`
 
+### Ghost Connections from Previous bt-tether Plugin
+
+**⚠️ Important:** If you previously used the default `bt-tether.py` plugin and are now switching to `bt-tether-helper`, you may have "ghost" connection profiles left behind by NetworkManager. These can cause conflicts between NetworkManager and D-Bus/BlueZ, resulting in strange connection issues, failed pairings, or inability to connect.
+
+**Symptoms:**
+
+- Connection fails intermittently with D-Bus/BlueZ errors
+- Strange behavior when pairing or connecting
+- Multiple connection attempts required to establish connection
+- "Device already connected" errors despite no active connection
+
+**To Check for Ghost Profiles:**
+
+```bash
+# List all NetworkManager connections
+sudo nmcli connection show
+
+# List stored connection files
+ls /etc/NetworkManager/system-connections/
+```
+
+Look for any Bluetooth tethering connections from your previous phone device names.
+
+**To Remove Ghost Profiles:**
+
+```bash
+# Remove by UUID (from nmcli connection show output)
+sudo nmcli connection delete <uuid>
+
+# Remove stored connection file by name
+sudo rm /etc/NetworkManager/system-connections/'phonename.nmconnection'
+```
+
+Replace `<uuid>` with the UUID from the `nmcli connection show` output and `phonename.nmconnection` with the actual filename.
+
+After removing ghost profiles, restart the plugin:
+
+```bash
+pwnkill
+```
+
 ### Device Won't Disconnect
 
 - Use the "Disconnect" button in web interface (automatically blocks device)
@@ -390,7 +431,7 @@ You do **not** need to find or enter your phone's MAC address manually. The web 
 
 ## API Endpoints
 
-The plugin provides REST API endpoints for external control. The web interface is the recommended way to manage devices, and MAC addresses are not required for normal use. For advanced/manual API usage, device selection is handled by the plugin and MACs are managed internally:
+The plugin provides REST API endpoints for external control. The web interface is the recommended way to manage devices. Device selection and MAC address management are handled internally by the plugin:
 
 - `GET /plugins/bt-tether-helper` - Web interface
 - `POST /plugins/bt-tether-helper/connect` - Initiate connection (device selection handled by plugin)
