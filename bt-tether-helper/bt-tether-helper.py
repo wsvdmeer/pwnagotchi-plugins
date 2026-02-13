@@ -40,6 +40,7 @@ import logging
 import os
 import re
 import traceback
+import datetime
 import json
 from pwnagotchi.plugins import Plugin
 from flask import render_template_string, request, jsonify
@@ -218,6 +219,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       let lastMetricsState = null;
       let switchingDeviceMac = null;
       let lastConnectionInProgress = false;
+      let lastDataConnected = false;
 
       loadTrustedDevicesSummary();
       loadNetworkMetrics();
@@ -392,6 +394,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           statusIPElement.style.display = 'none';
         }
         
+        // Detect transition to connected state (works regardless of polling interval)
+        if (data.connected && !lastDataConnected) {
+          // Clear switching state since connection is now complete
+          if (switchingDeviceMac) {
+            switchingDeviceMac = null;
+            if (window.switchTimeoutId) {
+              clearTimeout(window.switchTimeoutId);
+              window.switchTimeoutId = null;
+            }
+            const allButtons = document.querySelectorAll('.device-item button');
+            allButtons.forEach(btn => btn.disabled = false);
+          }
+          loadTrustedDevicesSummary();
+          // Refresh routes after a short delay to let routing table stabilise
+          setTimeout(loadNetworkMetrics, 2000);
+          // Transition to slow polling after 10 seconds
+          setTimeout(() => {
+            if (statusInterval && statusInterval._interval === 2000) {
+              console.log('Switching to slow polling (10s)');
+              stopStatusPolling();
+              statusInterval = setInterval(checkConnectionStatus, 10000);
+              statusInterval._interval = 10000;
+            }
+          }, 10000);
+        }
+        lastDataConnected = data.connected;
+
         // Manage polling based on connection state
         if (statusData.status === 'PAIRING' || statusData.status === 'TRUSTING' || statusData.status === 'CONNECTING' || statusData.status === 'RECONNECTING' || statusData.connection_in_progress) {
           // Actively connecting - poll faster (every 2 seconds)
@@ -402,33 +431,12 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             statusInterval._interval = 2000;
           }
         } else if (data.connected) {
-          // Just connected - keep fast polling for a bit to ensure UI updates, then slow down
+          // Connected - ensure we're on fast polling initially
           if (!statusInterval || statusInterval._interval !== 2000) {
             console.log('Connected - fast polling (2s) for initial update');
             stopStatusPolling();
             statusInterval = setInterval(checkConnectionStatus, 2000);
             statusInterval._interval = 2000;
-            // Clear switching state since connection is now complete
-            switchingDeviceMac = null;
-            // Cancel any pending switch timeout
-            if (window.switchTimeoutId) {
-              clearTimeout(window.switchTimeoutId);
-              window.switchTimeoutId = null;
-            }
-            // Re-enable buttons
-            const allButtons = document.querySelectorAll('.device-item button');
-            allButtons.forEach(btn => btn.disabled = false);
-            // Immediately refresh trusted devices list when connection established
-            loadTrustedDevicesSummary();
-            // Switch to slow polling after 10 seconds
-            setTimeout(() => {
-              if (statusInterval && statusInterval._interval === 2000) {
-                console.log('Switching to slow polling (10s)');
-                stopStatusPolling();
-                statusInterval = setInterval(checkConnectionStatus, 10000);
-                statusInterval._interval = 10000;
-              }
-            }, 10000);
           }
         } else if (data.paired) {
           // Paired but not connected - poll every 10 seconds
@@ -846,6 +854,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         
         // Track which device is being switched
         switchingDeviceMac = mac;
+        // Reset metrics state so routes refresh after the switch completes
+        lastMetricsState = null;
         
         // Immediately re-render device list to show spinner/loading state
         loadTrustedDevicesSummary();
@@ -1245,6 +1255,32 @@ class BTTetherHelper(Plugin):
     # UI and buffer constants
     UI_LOG_MAXLEN = 100  # Maximum number of log messages in UI buffer
 
+    # Status dict templates (used with _update_cached_ui_status)
+    STATUS_FULLY_DISCONNECTED = {
+        "paired": False,
+        "trusted": False,
+        "connected": False,
+        "pan_active": False,
+        "interface": None,
+        "ip_address": None,
+    }
+    STATUS_PAIRED_DISCONNECTED = {
+        "paired": True,
+        "trusted": True,
+        "connected": False,
+        "pan_active": False,
+        "interface": None,
+        "ip_address": None,
+    }
+    STATUS_UNTRUSTED_DISCONNECTED = {
+        "paired": True,
+        "trusted": False,
+        "connected": False,
+        "pan_active": False,
+        "interface": None,
+        "ip_address": None,
+    }
+
     # Compiled regex patterns (avoid re-compiling on every call)
     MAC_VALIDATE_PATTERN = re.compile(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
     ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-9;]*[mGKHF]|\x01|\x02")
@@ -1368,7 +1404,6 @@ class BTTetherHelper(Plugin):
 
         # Device rotation tracking for switching between multiple devices on reconnection
         self._device_rotation_list = []  # List of available devices to cycle through
-        self._current_device_index = 0  # Index of current device in rotation list
         self._dhcp_failed_macs = (
             {}
         )  # MAC -> timestamp of DHCP failure (skip device until cooldown)
@@ -1382,25 +1417,10 @@ class BTTetherHelper(Plugin):
             False  # Track UI-side connection state for fast wakeup
         )
 
-        self._cached_ui_status = {
-            "paired": False,
-            "trusted": False,
-            "connected": False,
-            "pan_active": False,
-            "interface": None,
-            "ip_address": None,
-        }
-        # Note: self._cached_ui_status_lock is now initialized in __init__()
+        self._cached_ui_status = self.STATUS_FULLY_DISCONNECTED.copy()
         self._ui_reference = (
             None  # Store UI reference for triggering updates from threads
         )
-
-        # Device name update configuration
-        # Note: self._name_update_thread and self._name_update_stop are now initialized in __init__()
-
-        # Note: self._initialization_done is now initialized in __init__()
-
-        # Note: self._fallback_thread is now initialized in __init__()
 
         # Add initial log entry
         self._log("INFO", "Plugin configuration loaded")
@@ -1499,16 +1519,7 @@ class BTTetherHelper(Plugin):
                     self._log(
                         "INFO", "No trusted devices found. Pair a device via web UI."
                     )
-                    self._update_cached_ui_status(
-                        status={
-                            "paired": False,
-                            "trusted": False,
-                            "connected": False,
-                            "pan_active": False,
-                            "interface": None,
-                            "ip_address": None,
-                        }
-                    )
+                    self._update_cached_ui_status(status=self.STATUS_FULLY_DISCONNECTED)
                     with self.lock:
                         self._initializing = False
                         self._screen_needs_refresh = True
@@ -1614,8 +1625,6 @@ class BTTetherHelper(Plugin):
 
     def _log(self, level, message):
         """Log to both system logger and UI log buffer"""
-        import datetime
-
         # Log to system
         full_message = f"[bt-tether-helper] {message}"
         if level == "ERROR":
@@ -1863,16 +1872,7 @@ class BTTetherHelper(Plugin):
                     # Cached status is stale - update it in background
                     threading.Thread(
                         target=self._update_cached_ui_status,
-                        args=(
-                            {
-                                "paired": False,
-                                "trusted": False,
-                                "connected": False,
-                                "pan_active": False,
-                                "interface": None,
-                                "ip_address": None,
-                            },
-                        ),
+                        args=(self.STATUS_FULLY_DISCONNECTED,),
                         daemon=True,
                     ).start()
 
@@ -2006,14 +2006,7 @@ class BTTetherHelper(Plugin):
                 if target_mac:
                     status = self._get_current_status(target_mac)
                 else:
-                    status = {
-                        "paired": False,
-                        "trusted": False,
-                        "connected": False,
-                        "pan_active": False,
-                        "interface": None,
-                        "ip_address": None,
-                    }
+                    status = self.STATUS_FULLY_DISCONNECTED
 
             # Update the cached status thread-safely
             with self._cached_ui_status_lock:
@@ -2155,14 +2148,7 @@ default-agent
 
                         # Update cached UI to show disconnected state
                         self._update_cached_ui_status(
-                            status={
-                                "paired": False,
-                                "trusted": False,
-                                "connected": False,
-                                "pan_active": False,
-                                "interface": None,
-                                "ip_address": None,
-                            }
+                            status=self.STATUS_FULLY_DISCONNECTED
                         )
                     # Silently recheck every 60s when paused (no logging)
 
@@ -2216,14 +2202,7 @@ default-agent
 
                     # Force cached UI to show disconnected (clear any lingering IP/interface)
                     self._update_cached_ui_status(
-                        status={
-                            "paired": True,
-                            "trusted": True,
-                            "connected": False,
-                            "pan_active": False,
-                            "interface": None,
-                            "ip_address": None,
-                        },
+                        status=self.STATUS_PAIRED_DISCONNECTED,
                         mac=current_mac,
                     )
 
@@ -2295,7 +2274,6 @@ default-agent
                         self._reconnect_failure_count = 0
                         self._first_failure_time = None
                         self._device_rotation_list = []
-                        self._current_device_index = 0
                         self._devices_tried_in_cycle = set()
                         # Clear DHCP failure for this device on success
                         self._dhcp_failed_macs.pop(current_mac.upper(), None)
@@ -2384,7 +2362,6 @@ default-agent
                                     self._reconnect_failure_count = 0
                                     self._first_failure_time = None
                                     self._device_rotation_list = []
-                                    self._current_device_index = 0
                                     self._devices_tried_in_cycle = set()
                                     self.phone_mac = next_device["mac"]
                                     self._last_connected_mac = next_device["mac"]
@@ -2452,7 +2429,6 @@ default-agent
                             self._reconnect_failure_count = 0
                             self._first_failure_time = None
                             self._device_rotation_list = []
-                            self._current_device_index = 0
                             self._devices_tried_in_cycle = set()
                 elif not status["paired"] or not status["trusted"]:
                     # Device not paired/trusted (or blocked), don't attempt auto-reconnect
@@ -2460,7 +2436,6 @@ default-agent
                     self._reconnect_failure_count = 0
                     self._first_failure_time = None
                     self._device_rotation_list = []
-                    self._current_device_index = 0
                     self._devices_tried_in_cycle = set()
                     logging.debug(
                         f"[bt-tether-helper] Device not ready for auto-reconnect (paired={status['paired']}, trusted={status['trusted']})"
@@ -2479,63 +2454,35 @@ default-agent
 
         self._log("INFO", "Connection monitor stopped")
 
-    def _reconnect_device(self):
-        """Attempt to reconnect to a previously paired device"""
+    def _perform_reconnect(self, mac, device_info=None, pre_cleanup=False):
+        """Core reconnection logic shared by _reconnect_device and _reconnect_device_with_mac.
+
+        Args:
+            mac: Target device MAC address
+            device_info: Optional dict with device info (name, etc.) for notifications
+            pre_cleanup: If True, clean up stale BNEP bridge before connecting
+        """
         try:
-            # Always prioritize last connected device for auto-reconnection
-            # This ensures we connect back to the device we were using before
-            best_device = None  # Initialize to avoid NameError later
-            if self._last_connected_mac:
-                # Try to find the last connected device
-                try:
-                    status = self._check_pair_status(self._last_connected_mac)
-                    if status["paired"] and status["trusted"]:
-                        mac = self._last_connected_mac
-                        self._log("INFO", f"Using last connected device: {mac}")
-                    else:
-                        # Last device is no longer paired/trusted, find best alternative
-                        self._log(
-                            "WARNING",
-                            f"Last connected device {self._last_connected_mac} is no longer paired/trusted, finding alternative...",
-                        )
-                        best_device = self._find_best_device_to_connect()
-                        if not best_device:
-                            self._log(
-                                "DEBUG", "No trusted devices found for reconnection"
-                            )
-                            return False
-                        mac = best_device["mac"]
-                except Exception as e:
-                    self._log(
-                        "WARNING",
-                        f"Error checking last connected device: {e}, finding alternative...",
-                    )
-                    best_device = self._find_best_device_to_connect()
-                    if not best_device:
-                        self._log("DEBUG", "No trusted devices found for reconnection")
-                        return False
-                    mac = best_device["mac"]
-            else:
-                # No last connected device, find best available
-                best_device = self._find_best_device_to_connect()
-                if not best_device:
-                    self._log("DEBUG", "No trusted devices found for reconnection")
-                    return False
-                mac = best_device["mac"]
-
-            self.phone_mac = mac
-
-            # Set flag to prevent concurrent operations
             with self.lock:
                 self._connection_in_progress = True
-                self._connection_start_time = (
-                    time.time()
-                )  # Track start time for timeout detection
-                self._initializing = (
-                    False  # Ensure initializing flag is cleared during reconnection
-                )
+                self._connection_start_time = time.time()
+                self._initializing = False
 
             self._log("INFO", f"Reconnecting to {mac}...")
+
+            # Pre-cleanup of stale BNEP bridge (used when switching between devices)
+            if pre_cleanup:
+                try:
+                    ifaces_out = subprocess.check_output(
+                        ["ip", "link", "show"], text=True, timeout=5
+                    )
+                    if "bnep0" in ifaces_out:
+                        self._log(
+                            "INFO", "Cleaning up stale BNEP bridge before reconnect..."
+                        )
+                        self._cleanup_bnep_bridge(mac=mac)
+                except Exception:
+                    pass
 
             # Check if device is blocked
             devices_output = self._run_cmd(
@@ -2551,7 +2498,7 @@ default-agent
             self._run_cmd(["bluetoothctl", "trust", mac], capture=True)
             time.sleep(self.DEVICE_OPERATION_DELAY)
 
-            # Start monitoring thread if this is the first trusted device and auto-reconnect is enabled
+            # Start monitoring thread if this is the first trusted device
             if self.auto_reconnect and not (
                 self._monitor_thread and self._monitor_thread.is_alive()
             ):
@@ -2560,14 +2507,32 @@ default-agent
                 )
                 self._start_monitoring_thread()
 
-            # Try NAP connection (this will also establish Bluetooth connection if needed)
+            # Try NAP connection
             self._log("INFO", f"Attempting NAP connection...")
             nap_connected = self._connect_nap_dbus(mac)
+
+            # If NAP failed, check if BlueZ is stuck and retry once after recovery
+            if not nap_connected:
+                last_error = getattr(self, "_last_nap_error", "") or ""
+                if (
+                    "NoReply" in last_error
+                    or "Did not receive a reply" in last_error
+                    or "Timeout" in last_error
+                    or "br-connection-busy" in last_error
+                ):
+                    self._log(
+                        "WARNING",
+                        f"NAP failed with '{last_error[:60]}' — checking BlueZ health...",
+                    )
+                    recovered = self._recover_bluez_if_stuck(mac=mac)
+                    if recovered:
+                        self._log("INFO", "Retrying NAP after BlueZ recovery...")
+                        nap_connected = self._connect_nap_dbus(mac)
 
             if nap_connected:
                 self._log("INFO", f"✓ Reconnection successful")
 
-                # Get PAN interface — Network1.Connect returns it directly
+                # Get PAN interface
                 iface = getattr(self, "_nap_interface", None)
                 if iface:
                     self._log("INFO", f"✓ Network1 returned interface: {iface}")
@@ -2581,14 +2546,12 @@ default-agent
                     # Setup network with DHCP
                     dhcp_ok = self._setup_network_dhcp(iface)
                     if not dhcp_ok:
-                        # DHCP failed — clean up the stale bridge and mark device
                         self._log(
                             "WARNING",
                             f"DHCP failed during reconnect — cleaning up bnep0",
                         )
                         self._dhcp_failed_macs[mac.upper()] = time.time()
                         self._cleanup_bnep_bridge(mac=mac)
-                        # Clear phone_mac so we try other devices
                         with self.lock:
                             if self.phone_mac and self.phone_mac.upper() == mac.upper():
                                 self.phone_mac = None
@@ -2598,31 +2561,32 @@ default-agent
 
                     # Verify internet connectivity
                     time.sleep(self.INTERNET_VERIFY_WAIT)
-                    if self._check_internet_connectivity():
+                    has_internet = self._check_internet_connectivity()
+
+                    if has_internet:
                         self._log("INFO", f"✓ Internet connectivity verified!")
+                    else:
+                        self._log("WARNING", "Reconnected but no internet detected")
 
-                        # Remember this device as last successfully connected
-                        self._last_connected_mac = mac
-                        # Clear DHCP failure for this device on success
-                        self._dhcp_failed_macs.pop(mac.upper(), None)
-                        # Get device name from best_device if available
-                        if best_device and "name" in best_device:
-                            self._last_connected_name = best_device["name"]
-                        else:
-                            device_info = self._run_cmd(
-                                ["bluetoothctl", "info", mac], capture=True, timeout=5
+                    # Remember this device as last successfully connected
+                    self._last_connected_mac = mac
+                    self._dhcp_failed_macs.pop(mac.upper(), None)
+                    if device_info and "name" in device_info:
+                        self._last_connected_name = device_info["name"]
+                    else:
+                        info_output = self._run_cmd(
+                            ["bluetoothctl", "info", mac], capture=True, timeout=5
+                        )
+                        if info_output:
+                            name_match = re.search(
+                                r"Name: (.+)$", info_output, re.MULTILINE
                             )
-                            if device_info:
-                                name_match = re.search(
-                                    r"Name: (.+)$", device_info, re.MULTILINE
-                                )
-                                if name_match:
-                                    self._last_connected_name = name_match.group(
-                                        1
-                                    ).strip()
-                        self._save_state()
+                            if name_match:
+                                self._last_connected_name = name_match.group(1).strip()
+                    self._save_state()
 
-                        # Get IP addresses and send notifications if configured
+                    # Send notifications on successful internet connection
+                    if has_internet:
                         try:
                             current_ip = self._get_current_ip()
                             current_ipv6 = self._get_global_ipv6(iface)
@@ -2634,25 +2598,24 @@ default-agent
                                     "INFO", f"Current IPv6 address: {current_ipv6}"
                                 )
 
-                            # Send Discord notification (IPv4 only, maintains compatibility)
                             if current_ip and self.discord_webhook_url:
                                 self._log(
                                     "INFO",
                                     "Discord webhook configured, starting notification thread...",
                                 )
-                                # Get device name for Discord notification
-                                device_info = self._run_cmd(
-                                    ["bluetoothctl", "info", mac],
-                                    capture=True,
-                                    timeout=5,
-                                )
                                 device_name_discord = None
                                 if device_info:
-                                    name_match = re.search(r"Name:\s+(.+)", device_info)
-                                    if name_match:
-                                        device_name_discord = name_match.group(
-                                            1
-                                        ).strip()
+                                    device_name_discord = device_info.get("name")
+                                if not device_name_discord:
+                                    info_out = self._run_cmd(
+                                        ["bluetoothctl", "info", mac],
+                                        capture=True,
+                                        timeout=5,
+                                    )
+                                    if info_out:
+                                        nm = re.search(r"Name:\s+(.+)", info_out)
+                                        if nm:
+                                            device_name_discord = nm.group(1).strip()
                                 threading.Thread(
                                     target=self._send_discord_notification,
                                     args=(current_ip, device_name_discord),
@@ -2667,43 +2630,29 @@ default-agent
                         except Exception as e:
                             self._log("ERROR", f"Failed to send notifications: {e}")
 
-                        # Update cached UI status FIRST while flag is still True
-                        self._update_cached_ui_status(mac=mac)
+                    # Update cached UI status FIRST while flag is still True
+                    self._update_cached_ui_status(mac=mac)
 
-                        # Then update status and clear flags
-                        with self.lock:
-                            self.status = self.STATE_CONNECTED
-                            self.message = f"✓ Reconnected! Internet via {iface}"
-                            self._connection_in_progress = False
-                            self._connection_start_time = None
-                            self._initializing = False
-                            self._screen_needs_refresh = True
-                        return True
-                    else:
-                        logging.warning(
-                            f"[bt-tether-helper] Reconnected but no internet detected"
-                        )
-                        # Update cached UI status FIRST while flag is still True
-                        self._update_cached_ui_status(mac=mac)
-
-                        # Then update status and clear flags
-                        with self.lock:
-                            self.status = self.STATE_CONNECTED
-                            self.message = f"Reconnected via {iface} but no internet"
-                            self._connection_in_progress = False
-                            self._connection_start_time = None
-                            self._initializing = False
-                            self._screen_needs_refresh = True
-                        return True
-                else:
-                    logging.warning(
-                        f"[bt-tether-helper] NAP connected but no interface detected - treating as connection failure"
+                    # Then update status and clear flags
+                    msg = (
+                        f"✓ Reconnected! Internet via {iface}"
+                        if has_internet
+                        else f"Reconnected via {iface} but no internet"
                     )
-                    # NAP reported success but PAN interface never appeared.
-                    # This leaves a phantom bridge inside BlueZ that will cause
-                    # br-connection-busy on the next attempt. Full cleanup needed.
+                    with self.lock:
+                        self.status = self.STATE_CONNECTED
+                        self.message = msg
+                        self._connection_in_progress = False
+                        self._connection_start_time = None
+                        self._initializing = False
+                        self._screen_needs_refresh = True
+                    return True
+                else:
+                    self._log(
+                        "WARNING",
+                        "NAP connected but no interface detected — cleaning up bridge",
+                    )
                     self._cleanup_bnep_bridge(mac=mac)
-
                     with self.lock:
                         self.status = self.STATE_DISCONNECTED
                         self.message = "NAP profile didn't create interface"
@@ -2713,192 +2662,84 @@ default-agent
                         self._screen_needs_refresh = True
                     return False
             else:
-                logging.warning(f"[bt-tether-helper] Reconnection failed")
+                self._log("WARNING", "Reconnection failed")
                 with self.lock:
                     self.status = self.STATE_DISCONNECTED
                     self.message = "Reconnection failed. Will retry later."
-                    self._connection_in_progress = False  # Clear flag immediately
-                    self._initializing = False  # Clear initializing flag
+                    self._connection_in_progress = False
+                    self._connection_start_time = None
+                    self._initializing = False
                     self._screen_needs_refresh = True
-                # Force cached UI to show disconnected (clear any lingering IP/interface)
                 self._update_cached_ui_status(
-                    status={
-                        "paired": True,
-                        "trusted": True,
-                        "connected": False,
-                        "pan_active": False,
-                        "interface": None,
-                        "ip_address": None,
-                    },
+                    status=self.STATUS_PAIRED_DISCONNECTED,
                     mac=mac,
                 )
                 return False
 
         except Exception as e:
-            logging.error(f"[bt-tether-helper] Reconnection error: {e}")
+            self._log("ERROR", f"Reconnection error: {e}")
             with self.lock:
                 self.status = self.STATE_DISCONNECTED
                 self.message = f"Reconnection error: {str(e)[:50]}"
-                self._connection_in_progress = False  # Clear flag immediately
-                self._initializing = False  # Clear initializing flag
+                self._connection_in_progress = False
+                self._connection_start_time = None
+                self._initializing = False
                 self._screen_needs_refresh = True
-            # Force cached UI to show disconnected (clear any lingering IP/interface)
             self._update_cached_ui_status(
-                status={
-                    "paired": True,
-                    "trusted": True,
-                    "connected": False,
-                    "pan_active": False,
-                    "interface": None,
-                    "ip_address": None,
-                },
+                status=self.STATUS_PAIRED_DISCONNECTED,
                 mac=mac,
             )
             return False
         finally:
-            # Ensure flags are cleared
             with self.lock:
                 if self._connection_in_progress:
                     self._connection_in_progress = False
                     self._connection_start_time = None
 
-    def _reconnect_device_with_mac(self, mac):
-        """Attempt to reconnect to a specific device by MAC address (used for fallback reconnection)"""
-        try:
-            # Set flag to prevent concurrent operations
-            with self.lock:
-                self._connection_in_progress = True
-                self._connection_start_time = time.time()
+    def _reconnect_device(self):
+        """Attempt to reconnect to a previously paired device"""
+        best_device = None
+        mac = None
 
-            self._log("INFO", f"Attempting to reconnect to {mac}...")
-
-            # Full BNEP bridge cleanup to avoid br-connection-busy.
-            # This is especially important when switching between devices —
-            # a phantom bridge from the previous device will block all NAP
-            # connections until properly released.
-            # Pass the target mac so only that device (and devices holding
-            # a Network1 bridge) are disconnected, not all paired devices.
+        if self._last_connected_mac:
             try:
-                ifaces_out = subprocess.check_output(
-                    ["ip", "link", "show"], text=True, timeout=5
-                )
-                if "bnep0" in ifaces_out:
-                    self._log(
-                        "INFO", "Cleaning up stale BNEP bridge before reconnect..."
-                    )
-                    self._cleanup_bnep_bridge(mac=mac)
-            except Exception:
-                pass  # Interface might not exist
-
-            # Check if device is blocked
-            devices_output = self._run_cmd(
-                ["bluetoothctl", "devices", "Blocked"], capture=True, timeout=5
-            )
-            if devices_output and devices_output != "Timeout" and mac in devices_output:
-                self._log("INFO", f"Unblocking device {mac}...")
-                self._run_cmd(["bluetoothctl", "unblock", mac], capture=True)
-                time.sleep(self.DEVICE_OPERATION_DELAY)
-
-            # Trust the device
-            self._log("INFO", f"Ensuring device is trusted...")
-            self._run_cmd(["bluetoothctl", "trust", mac], capture=True)
-            time.sleep(self.DEVICE_OPERATION_DELAY)
-
-            # Try NAP connection
-            self._log("INFO", f"Attempting NAP connection...")
-            nap_connected = self._connect_nap_dbus(mac)
-
-            if nap_connected:
-                self._log("INFO", f"✓ Reconnection successful")
-
-                # Get PAN interface — Network1.Connect returns it directly
-                iface = getattr(self, "_nap_interface", None)
-                if iface:
-                    self._log("INFO", f"✓ Network1 returned interface: {iface}")
+                status = self._check_pair_status(self._last_connected_mac)
+                if status["paired"] and status["trusted"]:
+                    mac = self._last_connected_mac
+                    self._log("INFO", f"Using last connected device: {mac}")
                 else:
-                    self._log("INFO", "Waiting for PAN interface to appear...")
-                    iface = self._wait_for_pan_interface(timeout=10)
-
-                if iface:
-                    self._log("INFO", f"✓ PAN interface active: {iface}")
-
-                    # Setup network with DHCP
-                    dhcp_ok = self._setup_network_dhcp(iface)
-                    if not dhcp_ok:
-                        # DHCP failed — clean up the stale bridge and mark device
-                        self._log(
-                            "WARNING",
-                            f"DHCP failed during reconnect — cleaning up bnep0",
-                        )
-                        self._dhcp_failed_macs[mac.upper()] = time.time()
-                        self._cleanup_bnep_bridge(mac=mac)
-                        # Clear phone_mac so we try other devices
-                        with self.lock:
-                            if self.phone_mac and self.phone_mac.upper() == mac.upper():
-                                self.phone_mac = None
-                        self._log("ERROR", f"Reconnection to {mac} failed!")
-                        with self.lock:
-                            self.status = self.STATE_DISCONNECTED
-                            self.message = "DHCP failed — trying other devices"
-                            self._connection_in_progress = False
-                            self._screen_needs_refresh = True
-                        return False
-
-                    self._log("INFO", f"✓ Network setup successful")
-
-                    # Verify internet connectivity
-                    time.sleep(self.INTERNET_VERIFY_WAIT)
-                    if self._check_internet_connectivity():
-                        self._log("INFO", f"✓ Internet connectivity verified!")
-
-                        # Remember this device as last successfully connected
-                        self._last_connected_mac = mac
-                        # Clear DHCP failure for this device on success
-                        self._dhcp_failed_macs.pop(mac.upper(), None)
-                        device_info = self._run_cmd(
-                            ["bluetoothctl", "info", mac], capture=True, timeout=5
-                        )
-                        if device_info:
-                            name_match = re.search(
-                                r"Name: (.+)$", device_info, re.MULTILINE
-                            )
-                            if name_match:
-                                self._last_connected_name = name_match.group(1).strip()
-                        self._save_state()
-
-                        # Update UI
-                        with self.lock:
-                            self.status = self.STATE_CONNECTED
-                            self.message = "Connected via Bluetooth tethering"
-                            self._connection_in_progress = False
-                            self._screen_needs_refresh = True
-
-                        # Update cached UI status
-                        self._update_cached_ui_status(
-                            status=self._get_full_connection_status(mac), mac=mac
-                        )
-                        return True
-                else:
-                    # NAP connected but bnep0 never appeared — phantom bridge
                     self._log(
                         "WARNING",
-                        "NAP connected but no interface detected — cleaning up bridge",
+                        f"Last connected device {self._last_connected_mac} is no longer paired/trusted, finding alternative...",
                     )
-                    self._cleanup_bnep_bridge(mac=mac)
+                    best_device = self._find_best_device_to_connect()
+                    if not best_device:
+                        self._log("DEBUG", "No trusted devices found for reconnection")
+                        return False
+                    mac = best_device["mac"]
+            except Exception as e:
+                self._log(
+                    "WARNING",
+                    f"Error checking last connected device: {e}, finding alternative...",
+                )
+                best_device = self._find_best_device_to_connect()
+                if not best_device:
+                    self._log("DEBUG", "No trusted devices found for reconnection")
+                    return False
+                mac = best_device["mac"]
+        else:
+            best_device = self._find_best_device_to_connect()
+            if not best_device:
+                self._log("DEBUG", "No trusted devices found for reconnection")
+                return False
+            mac = best_device["mac"]
 
-            self._log("ERROR", f"Reconnection to {mac} failed!")
-            with self.lock:
-                self.status = self.STATE_DISCONNECTED
-                self.message = "Reconnection failed"
-                self._connection_in_progress = False
-                self._screen_needs_refresh = True
-            return False
-        finally:
-            # Ensure flags are cleared
-            with self.lock:
-                if self._connection_in_progress:
-                    self._connection_in_progress = False
-                    self._connection_start_time = None
+        self.phone_mac = mac
+        return self._perform_reconnect(mac, device_info=best_device)
+
+    def _reconnect_device_with_mac(self, mac):
+        """Attempt to reconnect to a specific device by MAC address (used for device rotation)"""
+        return self._perform_reconnect(mac, pre_cleanup=True)
 
     def _monitor_agent_log_for_passkey(self, passkey_found_event):
         """Monitor agent log file for passkey display in real-time and auto-confirm"""
@@ -3164,14 +3005,7 @@ default-agent
                     # Update cached UI status FIRST to show disconnected state immediately
                     # This clears any lingering "Test Internet Connectivity" messages
                     self._update_cached_ui_status(
-                        status={
-                            "paired": True,
-                            "trusted": False,
-                            "connected": False,
-                            "pan_active": False,
-                            "interface": None,
-                            "ip_address": None,
-                        },
+                        status=self.STATUS_UNTRUSTED_DISCONNECTED,
                         mac=mac,
                     )
 
@@ -3294,14 +3128,7 @@ default-agent
 
                         # Update cached UI to show disconnected state immediately
                         self._update_cached_ui_status(
-                            status={
-                                "paired": False,
-                                "trusted": False,
-                                "connected": False,
-                                "pan_active": False,
-                                "interface": None,
-                                "ip_address": None,
-                            },
+                            status=self.STATUS_FULLY_DISCONNECTED,
                             mac=mac,
                         )
 
@@ -3348,7 +3175,6 @@ default-agent
                                 self._last_connected_name = None
                             # Reset device rotation state
                             self._device_rotation_list = []
-                            self._current_device_index = 0
                             self._devices_tried_in_cycle = set()
 
                         self._log("INFO", f"Device {mac} forgotten successfully")
@@ -3477,14 +3303,7 @@ default-agent
             # Update cached UI FIRST to immediately clear any lingering status messages
             # This must happen before setting flags to ensure UI shows clean disconnecting state
             self._update_cached_ui_status(
-                status={
-                    "paired": True,
-                    "trusted": False,
-                    "connected": False,
-                    "pan_active": False,
-                    "interface": None,
-                    "ip_address": None,
-                },
+                status=self.STATUS_UNTRUSTED_DISCONNECTED,
                 mac=mac,
             )
 
@@ -3600,14 +3419,7 @@ default-agent
             self._log("INFO", "Removing trust to prevent auto-reconnect...")
 
             self._update_cached_ui_status(
-                status={
-                    "paired": True,
-                    "trusted": False,
-                    "connected": False,
-                    "pan_active": False,
-                    "interface": None,
-                    "ip_address": None,
-                },
+                status=self.STATUS_UNTRUSTED_DISCONNECTED,
                 mac=mac,
             )
 
@@ -3640,16 +3452,7 @@ default-agent
             )
 
             # Update cached UI status to disconnected state FIRST
-            self._update_cached_ui_status(
-                status={
-                    "paired": False,
-                    "trusted": False,
-                    "connected": False,
-                    "pan_active": False,
-                    "interface": None,
-                    "ip_address": None,
-                }
-            )
+            self._update_cached_ui_status(status=self.STATUS_FULLY_DISCONNECTED)
 
             # Then update internal state - CRITICAL: Clear flags BEFORE returning
             with self.lock:
@@ -3699,7 +3502,6 @@ default-agent
                 self._disconnect_start_time = None
                 # Reset device rotation for next reconnection cycle
                 self._device_rotation_list = []
-                self._current_device_index = 0
                 self._devices_tried_in_cycle = set()
                 self._untrusting = False
                 self._untrust_start_time = None
@@ -4342,10 +4144,12 @@ default-agent
             return []
 
     def start_connection(self):
-        with self.lock:
-            # Find the best device to connect to (trusted devices or configured MAC)
-            best_device = self._find_best_device_to_connect()
+        # Find best device OUTSIDE the lock — _find_best_device_to_connect() does
+        # blocking I/O (bluetoothctl calls) which would hold the lock for 10+ seconds
+        # and freeze UI updates + webhooks.
+        best_device = self._find_best_device_to_connect()
 
+        with self.lock:
             if not best_device:
                 self.status = self.STATE_ERROR
                 self.message = "No trusted devices found - scan and pair a device first"
@@ -4375,13 +4179,10 @@ default-agent
 
             # Set flag INSIDE the lock to prevent race condition
             self._connection_in_progress = True
-            self._connection_start_time = time.time()  # Track when connection started
-            self._user_requested_disconnect = False  # Re-enable auto-reconnect
+            self._connection_start_time = time.time()
+            self._user_requested_disconnect = False
             self.status = self.STATE_CONNECTING
             self.message = f"Connecting to {best_device['name']}..."
-            self.phone_mac = best_device[
-                "mac"
-            ]  # Set phone_mac immediately so screen knows which device we're connecting to
 
         # Update cached UI status immediately so screen shows connecting state
         # Use current status - device may be paired/trusted from before
@@ -4662,6 +4463,26 @@ default-agent
                             time.sleep(2)
                             # Re-start the pairing agent since reset killed it
                             self._start_pairing_agent()
+
+                    elif last_error and (
+                        "NoReply" in last_error
+                        or "Did not receive a reply" in last_error
+                        or "Timeout" in last_error
+                    ):
+                        # D-Bus timeout — BlueZ may be stuck processing the
+                        # previous request.  This is the root cause of the
+                        # "works after reboot, fails after a while" pattern.
+                        self._log(
+                            "WARNING",
+                            f"D-Bus timeout detected (attempt {retry + 1}) — "
+                            "checking if BlueZ is stuck...",
+                        )
+                        recovered = self._recover_bluez_if_stuck(mac=mac)
+                        if recovered:
+                            self._log(
+                                "INFO",
+                                "BlueZ recovered — next retry should start clean",
+                            )
 
                     with self.lock:
                         self.message = f"NAP attempt {retry + 1}/{self.NAP_CONNECTION_MAX_RETRIES} failed..."
@@ -5055,6 +4876,113 @@ default-agent
 
         self._log("ERROR", f"Bluetooth not ready after {timeout}s: {last_error}")
         return False
+
+    def _check_bluez_responsive(self, timeout=5):
+        """Check if the BlueZ D-Bus service is still responsive.
+
+        After a Network1.Connect() timeout (NoReply), BlueZ can be left in a
+        stuck state where subsequent D-Bus calls also hang.  This method does
+        a quick GetManagedObjects() probe to detect that condition.
+
+        Returns True if BlueZ responds within *timeout* seconds, False if it
+        hangs or is unreachable.
+        """
+        if not DBUS_AVAILABLE:
+            return True  # can't check, assume OK
+
+        result = [None]  # mutable container for thread result
+
+        def _probe():
+            try:
+                bus = dbus.SystemBus()
+                manager = dbus.Interface(
+                    bus.get_object("org.bluez", "/"),
+                    "org.freedesktop.DBus.ObjectManager",
+                )
+                manager.GetManagedObjects()
+                result[0] = True
+            except Exception:
+                result[0] = False
+
+        t = threading.Thread(target=_probe, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
+            self._log(
+                "WARNING",
+                f"BlueZ D-Bus not responding after {timeout}s — stuck state detected",
+            )
+            return False
+        if not result[0]:
+            self._log(
+                "WARNING",
+                "BlueZ D-Bus probe failed — service may be crashed or unresponsive",
+            )
+            return False
+
+        return True
+
+    def _recover_bluez_if_stuck(self, mac=None):
+        """Detect and recover from a stuck BlueZ/D-Bus state.
+
+        Called after a NAP connection attempt that failed with a D-Bus timeout
+        (NoReply / 'Did not receive a reply').  These timeouts leave BlueZ
+        holding internal state that blocks all subsequent connection attempts
+        until the service is restarted — the same thing a reboot fixes.
+
+        Strategy:
+        1. Probe BlueZ with a quick D-Bus call to confirm it is stuck.
+        2. If stuck → full adapter reset (hciconfig down/up + systemctl restart).
+        3. Restart the pairing agent (killed by the reset).
+        4. Brief settle time before the caller retries the connection.
+
+        Returns True if recovery was performed, False if BlueZ was healthy.
+        """
+        # First check: is BlueZ actually stuck?
+        if self._check_bluez_responsive(timeout=5):
+            # BlueZ is responding — the failure may be transient.
+            # Still try a lighter cleanup: tear down any lingering BNEP bridge
+            # that could cause br-connection-busy on the next attempt.
+            if mac:
+                try:
+                    ifaces_out = subprocess.check_output(
+                        ["ip", "link", "show"], text=True, timeout=5
+                    )
+                    if "bnep0" in ifaces_out:
+                        self._log(
+                            "INFO",
+                            "BlueZ responsive but stale bnep0 found — cleaning up",
+                        )
+                        self._cleanup_bnep_bridge(mac=mac)
+                except Exception:
+                    pass
+            return False
+
+        # BlueZ is stuck — full reset required (same effect as a reboot)
+        self._log(
+            "WARNING",
+            "BlueZ is unresponsive — performing full adapter reset to recover...",
+        )
+        self.reset_bt()
+        time.sleep(2)
+
+        # Restart the pairing agent (killed by the adapter reset)
+        self._start_pairing_agent()
+
+        # Give BlueZ a moment to finish initializing
+        time.sleep(1)
+
+        # Verify recovery
+        if self._check_bluez_responsive(timeout=5):
+            self._log("INFO", "✓ BlueZ recovered after adapter reset")
+        else:
+            self._log(
+                "ERROR",
+                "BlueZ still unresponsive after reset — connection will likely fail",
+            )
+
+        return True
 
     def reset_bt(self):
         """Reset Bluetooth adapter at hardware level (needed on Trixie)"""
