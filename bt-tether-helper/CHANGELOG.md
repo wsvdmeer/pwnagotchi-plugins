@@ -8,6 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- **Performance**: Eliminated subprocess call in `/status` web endpoint — uses cached device name instead of shelling out to `bluetoothctl` on every 2-10s poll
+- **Performance**: Compiled regex patterns moved to class-level constants (`MAC_VALIDATE_PATTERN`, `ANSI_ESCAPE_PATTERN`, `SCAN_MAC_PATTERN`, `SCAN_ANSI_PATTERN`) — avoids recompilation on every call
+- **Constants**: Replaced magic numbers with named constants: `ROUTE_METRIC_BLUETOOTH` (200), `ROUTE_METRIC_MAX_FILTER` (500000), `PAN_INTERFACE_POLL_INTERVAL` (0.5), `PAIRING_SCAN_WAIT_TIMEOUT` (15), `PAIRING_DIALOG_TIMEOUT` (90), `NAP_DBUS_CONNECT_TIMEOUT` (15)
+- **Default position**: Changed default `mini_status_position` from `null` (auto) to `[110, 0]`
+- **Config format**: Updated documentation to use TOML block format (`[main.plugins.bt-tether-helper]`)
+- **README**: Fixed mini status indicator documentation to match actual code letters (added S, W, R, D states)
+
+### Removed
+
+- Dead Python code: `NETWORK_STABILIZE_WAIT` constant and its conditional check
+- Dead JavaScript functions: `testInternetConnectivity()`, `loadTrustedDevices()`, `connectToDevice()` — duplicates/references non-existent DOM elements
+- Orphaned comments left over from removed cache invalidation code
+- Internal development files: `CODE_ANALYSIS.md`, `DEVELOPMENT_NOTES.md`
+
+### Fixed
+
+- **README**: Added Android 16 bug warning (tethering stays active after BT disconnect)
+
+---
+
+## [Previous - Unreleased]
+
 ### Added
 
 - Button disable logic during connection operations for improved UX
