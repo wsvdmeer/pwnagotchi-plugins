@@ -6,22 +6,28 @@ Required System Packages:
     sudo apt-get install -y bluez network-manager python3-dbus python3-toml
 
 Features:
-- Bluetooth tethering to mobile phones
-- Device name updates with IP address (visible in Bluetooth settings)
+- Bluetooth tethering to mobile phones (iOS & Android)
+- Auto-discovery of trusted devices with tethering capability
+- Works with iOS randomized MAC addresses
 - Auto-reconnect functionality
-- Web UI for easy management
+- Web UI for easy device pairing and management
+- No manual MAC configuration needed
 
 Setup:
 1. Install packages: sudo apt-get install -y bluez network-manager python3-dbus python3-toml
 2. Enable services:
    sudo systemctl enable bluetooth && sudo systemctl start bluetooth
    sudo systemctl enable NetworkManager && sudo systemctl start NetworkManager
-3. Configure plugin in config.toml with phone MAC address
-4. Access web UI at http://<pwnagotchi-ip>:8080/plugins/bt-tether-helper
+3. Access web UI at http://<pwnagotchi-ip>:8080/plugins/bt-tether-helper
+4. Scan and pair your phone - it will auto-connect from then on!
 
 Configuration options:
+<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
 - main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Phone MAC address
 - main.plugins.bt-tether-helper.auto_reconnect = true  # Auto reconnect on disconnect
+=======
+- main.plugins.bt-tether-helper.auto_reconnect = true  # Auto reconnect on disconnect (default: true)
+>>>>>>> version/1.2.0-beta:bt-tether-helper.py
 - main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: Show status on display (disables both mini and detailed when false)
 - main.plugins.bt-tether-helper.show_mini_status = true  # Show mini status indicator (single letter: C/N/P/D)
 - main.plugins.bt-tether-helper.mini_status_position = null  # Position for mini status (null = auto top-right)
@@ -112,6 +118,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <h2>🔷 Bluetooth Tether</h2>
     
     <!-- Phone Connection & Status -->
+<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
     <div class="card" id="phoneConnectionCard" style="display: none;">
       <h3 style="margin: 0 0 12px 0;">📱 Phone Connection</h3>
       <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
@@ -119,6 +126,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div style="color: #4ec9b0; font-size: 14px;">{{ mac if mac else 'Not configured' }}</div>
         <div style="color: #888; margin-bottom: 4px; margin-top: 8px;">Discord Webhook:</div>
         <div style="color: {% if discord_webhook_url %}#4ec9b0{% else %}#f48771{% endif %}; font-size: 14px;">{% if discord_webhook_url %}✓ Enabled{% else %}✗ Disabled{% endif %}</div>
+=======
+    <div class="card" id="phoneConnectionCard">
+      <h3 style="margin: 0 0 12px 0;">📱 Connection Status</h3>
+      <div id="trustedDevicesInfo" style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
+        <div style="color: #888; margin-bottom: 4px;">Trusted Devices:</div>
+        <div id="trustedDevicesSummary" style="color: #4ec9b0; font-size: 14px;">Loading...</div>
+>>>>>>> version/1.2.0-beta:bt-tether-helper.py
       </div>
       
       <!-- Status in output style -->
@@ -139,10 +153,26 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <div style="margin-bottom: 12px;">
         <h4 style="margin: 0 0 8px 0; color: #8b949e; font-size: 14px;">📋 Output</h4>
         <div id="logViewer">
-          <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; line-height: 1.5;" id="logContent">
+          <div style="background: #0d1117; color: #d4d4d4; padding: 12px; padding-right: 16px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; line-height: 1.5;" id="logContent">
             <div style="color: #888;">Fetching logs...</div>
           </div>
         </div>
+        <style>
+          #logContent::-webkit-scrollbar {
+            width: 5px;
+          }
+          #logContent::-webkit-scrollbar-track {
+            background: #0d1117;
+            border-radius: 4px;
+          }
+          #logContent::-webkit-scrollbar-thumb {
+            background: #30363d;
+            border-radius: 4px;
+          }
+          #logContent::-webkit-scrollbar-thumb:hover {
+            background: #484f58;
+          }
+        </style>
       </div>
       
       <!-- Connect/Disconnect Actions -->
@@ -154,23 +184,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       
       <!-- Disconnect Section -->
       <div id="disconnectSection" style="display: none;">
-        <label style="display: flex; align-items: center; gap: 12px; padding: 12px; background: rgba(214, 159, 0, 0.1); border: 1px solid #d29922; border-radius: 4px; cursor: pointer; margin-bottom: 8px;">
-          <input type="checkbox" id="unpairCheckbox" style="width: 20px; height: 20px; margin: 0; cursor: pointer;" />
-          <span style="color: #d29922; font-size: 14px; font-weight: 500;">Also unpair device (requires passkey on next connection)</span>
-        </label>
         <button class="danger" onclick="disconnectDevice()" id="disconnectBtn" style="width: 100%; margin: 0 0 8px 0;">
           🔌 Disconnect
         </button>
       </div>
       
-      <small style="color: #8b949e; display: block; margin-bottom: 12px;">Click Connect for first-time pairing. Pairing dialog will appear on your phone. Disconnect blocks device to prevent auto-reconnect.</small>
+      <!-- Device Discovery Section -->
+      <div id="deviceDiscoverySection" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid #30363d;">
+        <h4 style="margin: 0 0 12px 0;">🔍 Discover Devices</h4>
+        <p style="color: #8b949e; font-size: 13px; margin: 0 0 12px 0;">Scan for nearby Bluetooth devices to pair:</p>
+        <button class="success" onclick="scanDevices()" id="scanBtn" style="width: 100%; margin: 0 0 12px 0;">
+          🔍 Scan
+        </button>
+        
+        <!-- Discovered Devices List -->
+        <div id="scanResults" style="display: none;">
+          <h5 style="margin: 0 0 8px 0; color: #8b949e;">Discovered Devices:</h5>
+          <div id="scanStatus" style="color: #8b949e; margin: 8px 0; font-size: 13px;">Scanning...</div>
+          <div id="deviceList"></div>
+        </div>
+      </div>
     </div>
     
     <!-- Test Internet Connectivity -->
     <div class="card" id="testInternetCard" style="display: none;">
       <h3 style="margin: 0 0 12px 0;">🔍 Test Internet Connectivity</h3>
       <button onclick="testInternet()" id="testInternetBtn" style="width: 100%; margin: 0 0 12px 0;">
-        🔍 Run Test
+        🔍 Test Internet Connectivity
       </button>
       
       <!-- Test Results -->
@@ -179,62 +219,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       </div>
     </div>
     
-    <!-- Scan for Devices -->
-    <div class="card" id="scanCard">
-      <h3 style="margin: 0 0 12px 0;">🔍 Scan for Devices</h3>
-      <div id="setupInstructions" style="background: rgba(88, 166, 255, 0.1); padding: 12px; border-radius: 4px; margin-bottom: 12px; border-left: 4px solid #58a6ff; color: #d4d4d4;">
-        <p style="margin: 0 0 8px 0; font-weight: bold; color: #79c0ff;">First-time setup:</p>
-        <ol style="margin: 0; padding-left: 20px; line-height: 1.6; color: #d4d4d4;">
-          <li>Make sure your phone's Bluetooth is ON</li>
-          <li>Click "Scan" below to discover devices</li>
-          <li>Find your phone in the list and click 📋 Copy MAC</li>
-          <li>Open <code style="background: #0d1117; padding: 2px 6px; border-radius: 3px; border: 1px solid #30363d; color: #79c0ff;">/etc/pwnagotchi/config.toml</code></li>
-          <li>Add: <code style="background: #0d1117; padding: 2px 6px; border-radius: 3px; border: 1px solid #30363d; color: #79c0ff;">main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"</code></li>
-          <li>Restart Pwnagotchi to apply changes</li>
-        </ol>
-      </div>
-      <button class="success" onclick="scanDevices()" id="scanBtn" style="width: 100%; margin: 0;">
-        🔍 Scan
-      </button>
-      
-      <!-- Discovered Devices List -->
-      <div id="scanResults" style="margin-top: 16px; display: none;">
-        <h4 style="margin: 0 0 8px 0;">Discovered Devices:</h4>
-        <div id="scanStatus" style="color: #8b949e; margin: 8px 0;">Scanning...</div>
-        <div id="deviceList"></div>
-      </div>
-    </div>
-    
-
-    
     <script>
       const macInput = document.getElementById("macInput");
       let statusInterval = null;
       let logInterval = null;
 
-      // Update card visibility and status on page load
-      updateCardVisibility();
-      if (macInput.value && /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(macInput.value)) {
-        // Show initializing state first
-        setInitializingStatus();
-        // Then check actual connection status
-        setTimeout(checkConnectionStatus, 1000);
-      }
+      // Load trusted devices on page load
+      loadTrustedDevicesSummary();
+      
+      // Show initializing state first
+      setInitializingStatus();
+      // Then check actual connection status
+      setTimeout(checkConnectionStatus, 1000);
       
       // Start log polling immediately
       refreshLogs();
       startLogPolling();
-      
-      function updateCardVisibility() {
-        const hasMac = macInput.value && /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(macInput.value);
-        // Always show scan card, just toggle which instructions to show
-        const setupInstructions = document.getElementById('setupInstructions');
-        if (setupInstructions) {
-          setupInstructions.style.display = hasMac ? 'none' : 'block';
-        }
-        document.getElementById('phoneConnectionCard').style.display = hasMac ? 'block' : 'none';
-        document.getElementById('testInternetCard').style.display = hasMac ? 'block' : 'none';
-      }
 
       function setInitializingStatus() {
         document.getElementById("statusPaired").innerHTML = 
@@ -259,7 +259,51 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
       async function checkConnectionStatus() {
         const mac = macInput.value.trim();
-        if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(mac)) return;
+        if (!/^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(mac)) {
+          // No valid MAC in input - try to get from backend status
+          try {
+            const statusResponse = await fetch(`/plugins/bt-tether-helper/status`);
+            const statusData = await statusResponse.json();
+            
+            // If backend has a current MAC, use it
+            if (statusData.mac && /^([0-9A-F]{2}:){5}[0-9A-F]{2}$/i.test(statusData.mac)) {
+              // We have a MAC from backend, check its status
+              const response = await fetch(`/plugins/bt-tether-helper/connection-status?mac=${encodeURIComponent(statusData.mac)}`);
+              const data = await response.json();
+              
+              // Update UI with backend MAC
+              macInput.value = statusData.mac;
+              updateStatusDisplay(statusData, data);
+              return;
+            }
+          } catch (err) {
+            console.error('Failed to get backend status:', err);
+          }
+          
+          // No valid MAC - hide connect button and show disconnected state
+          const connectBtn = document.getElementById('quickConnectBtn');
+          const disconnectSection = document.getElementById('disconnectSection');
+          connectBtn.style.display = 'none';
+          disconnectSection.style.display = 'none';
+          
+          // Update status to show disconnected/no device state
+          document.getElementById("statusPaired").innerHTML = 
+            `📱 Paired: <span style="color: #f48771;">✗ No</span>`;
+          
+          document.getElementById("statusTrusted").innerHTML = 
+            `🔐 Trusted: <span style="color: #f48771;">✗ No</span>`;
+          
+          document.getElementById("statusConnected").innerHTML = 
+            `🔵 Connected: <span style="color: #f48771;">✗ No</span>`;
+          
+          document.getElementById("statusInternet").innerHTML = 
+            `🌐 Internet: <span style="color: #f48771;">✗ Not Active</span>`;
+          
+          document.getElementById('statusIP').style.display = 'none';
+          document.getElementById('statusActiveConnection').style.display = 'none';
+          
+          return;
+        }
         
         try {
           // First check the plugin's internal status
@@ -269,128 +313,149 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           const response = await fetch(`/plugins/bt-tether-helper/connection-status?mac=${encodeURIComponent(mac)}`);
           const data = await response.json();
           
-          // Determine screen status letter (C/N/P/D)
-          let screenStatus = 'D';
-          if (data.pan_active) {
-            screenStatus = 'C';  // Connected with internet
-          } else if (data.connected) {
-            screenStatus = 'N';  // Connected but no internet
-          } else if (data.paired) {
-            screenStatus = 'P';  // Paired but not connected
-          }
+          updateStatusDisplay(statusData, data);
           
-          document.getElementById("statusPaired").innerHTML = 
-            `📱 Paired: <span style="color: ${data.paired ? '#4ec9b0' : '#f48771'};">${data.paired ? '✓ Yes' : '✗ No'}</span>`;
+        } catch (error) {
+          console.error('Status check failed:', error);
+        }
+      }
+      
+      function updateStatusDisplay(statusData, data) {
+        // Determine screen status letter (C/N/P/D)
+        let screenStatus = 'D';
+        if (data.pan_active) {
+          screenStatus = 'C';  // Connected with internet
+        } else if (data.connected) {
+          screenStatus = 'N';  // Connected but no internet
+        } else if (data.paired) {
+          screenStatus = 'P';  // Paired but not connected
+        }
+        
+        document.getElementById("statusPaired").innerHTML = 
+          `📱 Paired: <span style="color: ${data.paired ? '#4ec9b0' : '#f48771'};">${data.paired ? '✓ Yes' : '✗ No'}</span>`;
+        
+        document.getElementById("statusTrusted").innerHTML = 
+          `🔐 Trusted: <span style="color: ${data.trusted ? '#4ec9b0' : '#f48771'};">${data.trusted ? '✓ Yes' : '✗ No'}</span>`;
+        
+        document.getElementById("statusConnected").innerHTML = 
+          `🔵 Connected: <span style="color: ${data.connected ? '#4ec9b0' : '#f48771'};">${data.connected ? '✓ Yes' : '✗ No'}</span>`;
+        
+        document.getElementById("statusInternet").innerHTML = 
+          `🌐 Internet: <span style="color: ${data.pan_active ? '#4ec9b0' : '#f48771'};">${data.pan_active ? '✓ Active' : '✗ Not Active'}</span>${data.interface ? ` <span style="color: #888;">(${data.interface})</span>` : ''}`;
+        
+        // Show/hide test internet card based on connection status
+        const testInternetCard = document.getElementById('testInternetCard');
+        if (data.pan_active) {
+          testInternetCard.style.display = 'block';
+        } else {
+          testInternetCard.style.display = 'none';
+        }
+        
+        // Show IP address if available
+        const statusIPElement = document.getElementById('statusIP');
+        if (data.ip_address && data.pan_active) {
+          statusIPElement.style.display = 'block';
+          statusIPElement.innerHTML = `🔢 IP Address: <span style="color: #4ec9b0;">${data.ip_address}</span>`;
+        } else {
+          statusIPElement.style.display = 'none';
+        }
+        
+        // Show active connection type inside status card
+        const statusActiveConnection = document.getElementById('statusActiveConnection');
+        
+        if (data.default_route_interface) {
+          const isUsingBluetooth = data.default_route_interface === data.interface;
           
-          document.getElementById("statusTrusted").innerHTML = 
-            `🔐 Trusted: <span style="color: ${data.trusted ? '#4ec9b0' : '#f48771'};">${data.trusted ? '✓ Yes' : '✗ No'}</span>`;
+          // Determine connection type and details
+          let connType = 'Unknown';
+          let connEmoji = '🔌';
+          let connDetails = '';
           
-          document.getElementById("statusConnected").innerHTML = 
-            `🔵 Connected: <span style="color: ${data.connected ? '#4ec9b0' : '#f48771'};">${data.connected ? '✓ Yes' : '✗ No'}</span>`;
-          
-          document.getElementById("statusInternet").innerHTML = 
-            `🌐 Internet: <span style="color: ${data.pan_active ? '#4ec9b0' : '#f48771'};">${data.pan_active ? '✓ Active' : '✗ Not Active'}</span>${data.interface ? ` <span style="color: #888;">(${data.interface})</span>` : ''}`;
-          
-          // Show IP address if available
-          const statusIPElement = document.getElementById('statusIP');
-          if (data.ip_address && data.pan_active) {
-            statusIPElement.style.display = 'block';
-            statusIPElement.innerHTML = `🔢 IP Address: <span style="color: #4ec9b0;">${data.ip_address}</span>`;
-          } else {
-            statusIPElement.style.display = 'none';
-          }
-          
-          // Show active connection type inside status card
-          const statusActiveConnection = document.getElementById('statusActiveConnection');
-          
-          if (data.default_route_interface) {
-            const isUsingBluetooth = data.default_route_interface === data.interface;
-            
-            // Determine connection type and details
-            let connType = 'Unknown';
-            let connEmoji = '🔌';
-            let connDetails = '';
-            
-            if (data.default_route_interface.startsWith('usb')) {
-              connType = 'USB Tethering';
-              connEmoji = '🔌';
-              if (data.pan_active && !isUsingBluetooth) {
-                connDetails = '<div style="color: #ce9178; margin-top: 4px; font-size: 11px;">💡 Bluetooth is on standby • USB has priority due to higher speed</div>';
-              }
-            } else if (data.default_route_interface.startsWith('bnep')) {
-              connType = 'Bluetooth Tethering';
-              connEmoji = '📱';
-            } else if (data.default_route_interface.startsWith('eth')) {
-              connType = 'Ethernet';
-              connEmoji = '🌐';
-              if (data.pan_active) {
-                connDetails = '<div style="color: #ce9178; margin-top: 4px; font-size: 11px;">💡 Bluetooth is on standby • Ethernet is active</div>';
-              }
-            } else if (data.default_route_interface.startsWith('wlan')) {
-              connType = 'Wi-Fi';
-              connEmoji = '📶';
-              if (data.pan_active) {
-                connDetails = '<div style="color: #ce9178; margin-top: 4px; font-size: 11px;">💡 Bluetooth is on standby • Wi-Fi is active</div>';
-              }
+          if (data.default_route_interface.startsWith('usb')) {
+            connType = 'USB Tethering';
+            connEmoji = '🔌';
+            if (data.pan_active && !isUsingBluetooth) {
+              connDetails = '<div style="color: #ce9178; margin-top: 4px; font-size: 11px;">💡 Bluetooth is on standby • USB has priority due to higher speed</div>';
             }
-            
-            statusActiveConnection.style.display = 'block';
-            statusActiveConnection.innerHTML = `${connEmoji} <span style="color: #4ec9b0; font-weight: bold;">${connType}</span> <span style="color: #888;">(${data.default_route_interface})</span>${connDetails}`;
-          } else {
-            statusActiveConnection.style.display = 'none';
-          }
-          
-          // Manage polling based on connection state
-          if (statusData.status === 'CONNECTING' || statusData.status === 'PAIRING' || statusData.status === 'RECONNECTING') {
-            // Actively connecting - poll faster (every 2 seconds)
-            if (!statusInterval || statusInterval._interval !== 2000) {
-              console.log('Connection in progress - fast polling (2s)');
-              stopStatusPolling();
-              statusInterval = setInterval(checkConnectionStatus, 2000);
-              statusInterval._interval = 2000;
+          } else if (data.default_route_interface.startsWith('bnep')) {
+            connType = 'Bluetooth Tethering';
+            connEmoji = '📱';
+          } else if (data.default_route_interface.startsWith('eth')) {
+            connType = 'Ethernet';
+            connEmoji = '🌐';
+            if (data.pan_active) {
+              connDetails = '<div style="color: #ce9178; margin-top: 4px; font-size: 11px;">💡 Bluetooth is on standby • Ethernet is active</div>';
             }
-          } else {
-            // Otherwise poll slower (every 5 seconds) to keep status updated
-            if (!statusInterval || statusInterval._interval !== 5000) {
-              console.log('Idle/connected - slow polling (5s)');
-              stopStatusPolling();
-              statusInterval = setInterval(checkConnectionStatus, 5000);
-              statusInterval._interval = 5000;
+          } else if (data.default_route_interface.startsWith('wlan')) {
+            connType = 'Wi-Fi';
+            connEmoji = '📶';
+            if (data.pan_active) {
+              connDetails = '<div style="color: #ce9178; margin-top: 4px; font-size: 11px;">💡 Bluetooth is on standby • Wi-Fi is active</div>';
             }
           }
           
-          // Update button states
-          // Show/hide connect/disconnect buttons based on connection status
-          const connectBtn = document.getElementById('quickConnectBtn');
-          const disconnectSection = document.getElementById('disconnectSection');
-          const unpairCheckbox = document.getElementById('unpairCheckbox');
-          
-          // Set button state based on current status
-          if (statusData.disconnecting) {
-            // Show disconnecting state
-            connectBtn.disabled = true;
-            connectBtn.innerHTML = '<span class="spinner"></span> Disconnecting...';
-          } else if (statusData.untrusting) {
-            // Show untrusting state  
-            connectBtn.disabled = true;
-            connectBtn.innerHTML = '<span class="spinner"></span> Untrusting...';
-          } else if (statusData.status === 'PAIRING' || statusData.status === 'CONNECTING' || statusData.status === 'RECONNECTING') {
-            // Show spinner during connection operations
-            connectBtn.disabled = true;
-            connectBtn.innerHTML = '<span class="spinner"></span> Connecting...';
-          } else if (!data.connected) {
-            // Enable button when disconnected and not connecting
-            connectBtn.disabled = false;
-            connectBtn.innerHTML = '⚡ Connect to Phone';
+          statusActiveConnection.style.display = 'block';
+          statusActiveConnection.innerHTML = `${connEmoji} <span style="color: #4ec9b0; font-weight: bold;">${connType}</span> <span style="color: #888;">(${data.default_route_interface})</span>${connDetails}`;
+        } else {
+          statusActiveConnection.style.display = 'none';
+        }
+        
+        // Manage polling based on connection state
+        if (statusData.status === 'PAIRING' || statusData.status === 'TRUSTING' || statusData.status === 'CONNECTING' || statusData.status === 'RECONNECTING' || statusData.connection_in_progress) {
+          // Actively connecting - poll faster (every 2 seconds)
+          if (!statusInterval || statusInterval._interval !== 2000) {
+            console.log('Connection in progress - fast polling (2s)');
+            stopStatusPolling();
+            statusInterval = setInterval(checkConnectionStatus, 2000);
+            statusInterval._interval = 2000;
           }
-          
-          // Disable checkbox during disconnecting operations
-          if (unpairCheckbox) {
-            unpairCheckbox.disabled = statusData.disconnecting || statusData.untrusting;
+        } else if (data.connected || data.paired) {
+          // Connected or paired - poll slower (every 10 seconds) to keep status updated
+          if (!statusInterval || statusInterval._interval !== 10000) {
+            console.log('Connected/paired - slow polling (10s)');
+            stopStatusPolling();
+            statusInterval = setInterval(checkConnectionStatus, 10000);
+            statusInterval._interval = 10000;
           }
+        } else {
+          // Disconnected and not paired - poll very slowly (every 30 seconds) to catch new devices
+          if (!statusInterval || statusInterval._interval !== 30000) {
+            console.log('Disconnected - slow polling (30s)');
+            stopStatusPolling();
+            statusInterval = setInterval(checkConnectionStatus, 30000);
+            statusInterval._interval = 30000;
+          }
+        }
+        
+        // Update button states
+        // Show/hide connect/disconnect buttons based on connection status
+        const connectBtn = document.getElementById('quickConnectBtn');
+        const disconnectSection = document.getElementById('disconnectSection');
+        
+        // Check if ANY operation is in progress
+        const operationInProgress = statusData.disconnecting || statusData.untrusting || statusData.connection_in_progress || statusData.status === 'PAIRING' || statusData.status === 'TRUSTING' || statusData.status === 'CONNECTING' || statusData.status === 'RECONNECTING';
+        
+        // Set button state based on current status
+        if (statusData.disconnecting) {
+          // Show disconnecting state - hide all buttons during disconnect
+          connectBtn.style.display = 'none';
+          disconnectSection.style.display = 'none';
+        } else if (statusData.untrusting) {
+          // Show untrusting state - hide all buttons during untrust
+          connectBtn.style.display = 'none';
+          disconnectSection.style.display = 'none';
+        } else if (statusData.status === 'PAIRING' || statusData.status === 'TRUSTING' || statusData.status === 'CONNECTING' || statusData.status === 'RECONNECTING') {
+          // Show spinner during connection operations - hide disconnect section during connect
+          connectBtn.disabled = true;
+          connectBtn.innerHTML = '<span class="spinner"></span> Connecting...';
+          connectBtn.style.display = 'block';
+          disconnectSection.style.display = 'none';  // Hide disconnect while pairing/connecting
+        } else {
+          // Reset button to normal state when not in any operation
+          connectBtn.disabled = false;
+          connectBtn.innerHTML = '⚡ Connect to Phone';
           
-          // Show connect button only when paired/trusted but not connected
-          // Show disconnect section when connected or paired
+          // Show/hide buttons based on connection status when no operation in progress
           if (data.connected) {
             connectBtn.style.display = 'none';
             disconnectSection.style.display = 'block';
@@ -401,12 +466,22 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             connectBtn.style.display = 'none';
             disconnectSection.style.display = 'block';
           } else {
-            connectBtn.style.display = 'block';
+            // Not paired - hide both connect and disconnect buttons
+            connectBtn.style.display = 'none';
             disconnectSection.style.display = 'none';
           }
-          
-        } catch (error) {
-          console.error('Status check failed:', error);
+        }
+        
+        // Only refresh trusted devices summary if connection state changed or scanning state changed
+        // This prevents frequent calls that might interfere with scan results display
+        if (!window.lastStatusUpdate || 
+            (window.lastStatusUpdate.connected !== (statusData.mac && data.connected)) ||
+            (window.lastStatusUpdate.scanning !== statusData.scanning)) {
+          loadTrustedDevicesSummary();
+          window.lastStatusUpdate = {
+            connected: statusData.mac && data.connected,
+            scanning: statusData.scanning
+          };
         }
       }
 
@@ -473,11 +548,36 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         showFeedback("Scanning for devices... Keep phone Bluetooth settings open!", "info");
         
         try {
+          // Start the background scan
           const response = await fetch('/plugins/bt-tether-helper/scan', { method: 'GET' });
           const data = await response.json();
           
+          // Now poll for results every 2 seconds while devices list is empty
+          let pollCount = 0;
+          const maxPolls = 20; // Poll for up to 40 seconds (20 * 2s)
+          
+          while (pollCount < maxPolls && (!data.devices || data.devices.length === 0)) {
+            pollCount++;
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+            
+            // Poll for updated results
+            try {
+              const pollResponse = await fetch('/plugins/bt-tether-helper/scan', { method: 'GET' });
+              data.devices = (await pollResponse.json()).devices || [];
+              
+              // Update status to show we're still waiting
+              if (data.devices.length === 0) {
+                const elapsed = pollCount * 2;
+                scanStatus.innerHTML = `<span class="spinner"></span> Still scanning... (${30 - Math.min(elapsed, 30)}s remaining)`;
+              }
+            } catch (e) {
+              // Continue polling on error
+              console.log('Poll error:', e);
+            }
+          }
+          
           if (data.devices && data.devices.length > 0) {
-            // Show all discovered devices with copy buttons
+            // Show all discovered devices with pair buttons
             scanStatus.textContent = `Found ${data.devices.length} device(s):`;
             deviceList.innerHTML = '';
             data.devices.forEach(device => {
@@ -488,11 +588,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                   <b>${device.name}</b><br>
                   <small style="color: #666;">${device.mac}</small>
                 </div>
-                <button onclick="copyMacToClipboard('${device.mac}'); return false;" style="margin: 0;">📋 Copy MAC</button>
+                <button onclick="pairAndConnectDevice('${device.mac}', '${device.name.replace(/'/g, "\\'")}'); return false;" class="success" style="margin: 0;">🔗 Pair</button>
               `;
               deviceList.appendChild(div);
             });
-            showFeedback(`Found ${data.devices.length} device(s). Copy MAC to add to config.toml`, "success");
+            showFeedback(`Found ${data.devices.length} device(s). Click Pair to connect!`, "success");
           } else {
             scanStatus.textContent = 'No devices found';
             showFeedback("No devices found. Make sure phone Bluetooth is ON.", "warning");
@@ -506,23 +606,218 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
       }
 
-      function copyMacToClipboard(mac) {
-        navigator.clipboard.writeText(mac).then(() => {
-          showFeedback(`MAC address copied: ${mac}\n\nAdd this to your config.toml:\nmain.plugins.bt-tether-helper.mac = "${mac}"`, "success");
-        }).catch(err => {
-          // Fallback for older browsers
-          const textArea = document.createElement('textarea');
-          textArea.value = mac;
-          document.body.appendChild(textArea);
-          textArea.select();
-          try {
-            document.execCommand('copy');
-            showFeedback(`MAC address copied: ${mac}\n\nAdd this to your config.toml:\nmain.plugins.bt-tether-helper.mac = "${mac}"`, "success");
-          } catch (err) {
-            showFeedback(`Failed to copy. MAC: ${mac}`, "error");
+      async function loadTrustedDevicesSummary() {
+        try {
+          // Check if plugin is initializing first
+          const statusResponse = await fetch('/plugins/bt-tether-helper/status');
+          const statusData = await statusResponse.json();
+          
+          const summaryDiv = document.getElementById('trustedDevicesSummary');
+          const deviceDiscoverySection = document.getElementById('deviceDiscoverySection');
+          
+          // Hide device discovery section during initialization, pairing, connecting, reconnecting, disconnecting, or untrusting
+          const isConnecting = statusData.initializing || 
+                               statusData.disconnecting ||
+                               statusData.untrusting ||
+                               statusData.connection_in_progress ||
+                               statusData.status === 'PAIRING' || 
+                               statusData.status === 'CONNECTING' || 
+                               statusData.status === 'RECONNECTING';
+          
+          // Show initializing state if plugin is still starting up
+          if (statusData.initializing) {
+            summaryDiv.innerHTML = '<span style="color: #8b949e;">🔄 Initializing Bluetooth...</span>';
+            deviceDiscoverySection.style.display = 'none';
+            // Poll again in 2 seconds to detect when initialization completes
+            setTimeout(loadTrustedDevicesSummary, 2000);
+            return;
           }
-          document.body.removeChild(textArea);
-        });
+          
+          // Show disconnecting/untrusting state
+          if (statusData.disconnecting) {
+            summaryDiv.innerHTML = '<span style="color: #f85149;">🔌 Disconnecting...</span>';
+            deviceDiscoverySection.style.display = 'none';
+            return;
+          }
+          
+          if (statusData.untrusting) {
+            summaryDiv.innerHTML = '<span style="color: #f85149;">🔓 Removing trust...</span>';
+            deviceDiscoverySection.style.display = 'none';
+            return;
+          }
+          
+          const response = await fetch('/plugins/bt-tether-helper/trusted-devices');
+          const data = await response.json();
+          
+          if (data.devices && data.devices.length > 0) {
+            const napDevices = data.devices.filter(d => d.has_nap);
+            const connectedDevice = napDevices.find(d => d.connected);
+            
+            // Hide device discovery section when trusted devices exist OR when connecting
+            deviceDiscoverySection.style.display = 'none';
+            
+            if (connectedDevice) {
+              summaryDiv.innerHTML = `<span style="color: #3fb950;">🔵 Connected to ${connectedDevice.name}</span><br><small style="color: #888;">${connectedDevice.mac}</small>`;
+            } else if (napDevices.length > 0) {
+              summaryDiv.innerHTML = napDevices.map(d => 
+                `<div style="margin: 4px 0;">📱 ${d.name}<br><small style="color: #888;">${d.mac}</small></div>`
+              ).join('');
+            } else {
+              summaryDiv.innerHTML = `<span style="color: #f85149;">${data.devices.length} paired device(s) but none support tethering</span>`;
+              // Show device discovery section if no devices support tethering AND not connecting
+              deviceDiscoverySection.style.display = isConnecting ? 'none' : 'block';
+            }
+          } else {
+            // Only show device discovery section when no devices AND not connecting
+            if (isConnecting) {
+              deviceDiscoverySection.style.display = 'none';
+              summaryDiv.innerHTML = '<span style="color: #8b949e;">Connecting...</span>';
+            } else {
+              deviceDiscoverySection.style.display = 'block';
+              summaryDiv.innerHTML = '<span style="color: #8b949e;">No paired devices - scan to pair a device</span>';
+            }
+          }
+        } catch (error) {
+          document.getElementById('trustedDevicesSummary').innerHTML = '<span style="color: #f85149;">Error loading devices</span>';
+        }
+      }
+
+      async function pairAndConnectDevice(mac, name) {
+        showFeedback(`Starting pairing with ${name}... Watch for pairing dialog!`, "info");
+        
+        // Hide scan results and clear device list immediately when pairing starts
+        const scanResults = document.getElementById('scanResults');
+        const deviceList = document.getElementById('deviceList');
+        const scanStatus = document.getElementById('scanStatus');
+        if (scanResults) {
+          scanResults.style.display = 'none';
+        }
+        if (deviceList) {
+          deviceList.innerHTML = '';
+        }
+        if (scanStatus) {
+          scanStatus.innerHTML = '';
+        }
+        
+        // Hide scan card immediately when pairing starts
+        const scanCard = document.getElementById('scanCard');
+        if (scanCard) {
+          scanCard.style.display = 'none';
+        }
+        
+        // Show connecting state on the connect button immediately
+        const connectBtn = document.getElementById('quickConnectBtn');
+        connectBtn.style.display = 'block';
+        connectBtn.disabled = true;
+        connectBtn.innerHTML = '<span class="spinner"></span> Connecting...';
+        
+        try {
+          const response = await fetch(`/plugins/bt-tether-helper/pair-device?mac=${encodeURIComponent(mac)}&name=${encodeURIComponent(name)}`, { method: 'GET' });
+          const data = await response.json();
+          
+          if (data.success) {
+            showFeedback(`Pairing started with ${name}! Accept the dialog on your phone.`, "success");
+            
+            // Update MAC input field with the paired device
+            macInput.value = mac;
+            
+            // Scroll to the connection status card
+            const phoneConnectionCard = document.getElementById('phoneConnectionCard');
+            if (phoneConnectionCard) {
+              phoneConnectionCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+            
+            // Start status polling to show connection progress
+            startStatusPolling();
+            
+            // Reload trusted devices summary
+            setTimeout(loadTrustedDevicesSummary, 2000);
+            
+            // Check connection status to update UI with connect button
+            setTimeout(checkConnectionStatus, 1000);
+          } else {
+            showFeedback(`Pairing failed: ${data.message}`, "error");
+            // Reset button on failure
+            connectBtn.disabled = false;
+            connectBtn.innerHTML = '⚡ Connect to Phone';
+          }
+        } catch (error) {
+          showFeedback(`Pairing failed: ${error.message}`, "error");
+          // Reset button on error
+          connectBtn.disabled = false;
+          connectBtn.innerHTML = '⚡ Connect to Phone';
+        }
+      }
+
+      async function loadTrustedDevices() {
+        const loadBtn = document.getElementById('loadTrustedBtn');
+        const autoConnectBtn = document.getElementById('autoConnectBtn');
+        const devicesList = document.getElementById('trustedDevicesList');
+        const devicesContent = document.getElementById('trustedDevicesContent');
+        
+        loadBtn.disabled = true;
+        loadBtn.innerHTML = '<span class="spinner"></span> Loading...';
+        
+        try {
+          const response = await fetch('/plugins/bt-tether-helper/trusted-devices');
+          const data = await response.json();
+          
+          if (data.devices && data.devices.length > 0) {
+            devicesList.style.display = 'block';
+            autoConnectBtn.style.display = 'block';
+            devicesContent.innerHTML = '';
+            
+            data.devices.forEach(device => {
+              const div = document.createElement('div');
+              div.className = 'device-item';
+              
+              const statusIcon = device.connected ? '🔵' : device.paired ? '📱' : '❓';
+              const napIcon = device.has_nap ? '🌐' : '❌';
+              
+              div.innerHTML = `
+                <div>
+                  <b>${statusIcon} ${device.name}</b><br>
+                  <small style="color: #666;">
+                    MAC: ${device.mac}<br>
+                    NAP: ${napIcon} | 
+                    Paired: ${device.paired ? '✓' : '✗'} | 
+                    Trusted: ${device.trusted ? '✓' : '✗'} |
+                    Connected: ${device.connected ? '✓' : '✗'}
+                  </small>
+                </div>
+                ${device.has_nap && !device.connected ? `<button onclick="connectToDevice('${device.mac}', '${device.name.replace(/'/g, "\\'")}'); return false;" class="success" style="margin: 0;">🔌 Connect</button>` : ''}
+              `;
+              devicesContent.appendChild(div);
+            });
+            
+            showFeedback(`Found ${data.devices.length} trusted device(s)`, "success");
+          } else {
+            devicesContent.innerHTML = '<div style="color: #888; padding: 20px; text-align: center;">No trusted devices found. Scan and pair a device first!</div>';
+            showFeedback("No trusted devices found. Use scan to pair a new device.", "warning");
+          }
+        } catch (error) {
+          showFeedback("Failed to load trusted devices: " + error.message, "error");
+        } finally {
+          loadBtn.disabled = false;
+          loadBtn.innerHTML = '📋 Show Details';
+        }
+      }
+
+      async function connectToDevice(mac, name) {
+        try {
+          const response = await fetch(`/plugins/bt-tether-helper/connect?mac=${encodeURIComponent(mac)}`, { method: 'GET' });
+          const data = await response.json();
+          
+          if (data.success) {
+            showFeedback(`Connection started to ${name}`, "success");
+            startStatusPolling();
+            setTimeout(loadTrustedDevicesSummary, 2000);
+          } else {
+            showFeedback(`Connection failed: ${data.message}`, "error");
+          }
+        } catch (error) {
+          showFeedback(`Connection failed: ${error.message}`, "error");
+        }
       }
 
       async function testInternet() {
@@ -627,44 +922,80 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           return;
         }
         
-        const unpairCheckbox = document.getElementById('unpairCheckbox');
-        const shouldUnpair = unpairCheckbox.checked;
         const disconnectBtn = document.getElementById('disconnectBtn');
+        const disconnectSection = document.getElementById('disconnectSection');
+        const testInternetCard = document.getElementById('testInternetCard');
+        
+        // Hide the disconnect section immediately to prevent multiple clicks
+        disconnectSection.style.display = 'none';
+        // Hide internet test card immediately when disconnecting
+        testInternetCard.style.display = 'none';
         
         disconnectBtn.disabled = true;
         disconnectBtn.innerHTML = '<span class="spinner"></span> Disconnecting...';
         
-        showFeedback(shouldUnpair ? "Disconnecting and unpairing device..." : "Disconnecting from device...", "info");
+        showFeedback("Disconnecting from device...", "info");
         
         try {
           const response = await fetch(`/plugins/bt-tether-helper/disconnect?mac=${encodeURIComponent(mac)}`, { method: 'GET' });
           const data = await response.json();
           
           if (data.success) {
-            // Disconnect already removes the device, so no need to call unpair separately
-            if (shouldUnpair) {
-              showFeedback("Device disconnected and unpaired. Passkey required for next connection.", "success");
-            } else {
-              showFeedback("Device disconnected and blocked. Phone will see connection drop automatically.", "success");
-            }
-            
-            // Reset the unpair checkbox after successful disconnect
-            unpairCheckbox.checked = false;
-            
-            stopStatusPolling();
-            // Wait a moment for backend to complete all operations
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            // Force fresh status check after disconnect to update UI
-            await checkConnectionStatus();
-            // Don't restart polling - we're disconnected
-          } else {
-            showFeedback(data.message || "Disconnect failed", "error");
+            showFeedback("Device disconnected and removed.", "success");
           }
+          
+          // Always clear MAC input since disconnect always unpairs the device
+          macInput.value = '';
+          
+          // Update both status displays immediately to show "Disconnecting..."
+          await checkConnectionStatus();
+          await loadTrustedDevicesSummary();
+          
+          // Reset connection polling after disconnect
+          stopStatusPolling();
         } catch (error) {
           showFeedback("Disconnect failed: " + error.message, "error");
         } finally {
           disconnectBtn.disabled = false;
           disconnectBtn.innerHTML = '🔌 Disconnect';
+        }
+      }
+
+      async function testInternetConnectivity() {
+        const testBtn = document.getElementById('testBtn');
+        const testResultsMessage = document.getElementById('testResultsMessage');
+        
+        testBtn.disabled = true;
+        testBtn.innerHTML = '<span class="spinner"></span> Testing...';
+        testResultsMessage.style.display = 'block';
+        testResultsMessage.className = 'message-box message-info';
+        testResultsMessage.innerHTML = '<span class="spinner"></span> Running connectivity tests...';
+        
+        try {
+          const response = await fetch('/plugins/bt-tether-helper/test-internet', { method: 'GET' });
+          const data = await response.json();
+          
+          let resultHtml = '<div style="font-family: monospace; font-size: 13px; line-height: 1.6;">';
+          
+          // Ping test
+          resultHtml += `<div style="margin-bottom: 8px;">`;
+          resultHtml += `<b>📡 Ping Test (8.8.8.8):</b> `;
+          resultHtml += data.ping_success ? '<span style="color: #28a745;">✓ Success</span>' : '<span style="color: #dc3545;">✗ Failed</span>';
+          resultHtml += `</div>`;
+          
+          // DNS test
+          resultHtml += `<div style="margin-bottom: 8px;">`;
+          resultHtml += `<b>🔍 DNS Test (google.com):</b> `;
+          resultHtml += data.dns_success ? '<span style="color: #28a745;">✓ Success</span>' : '<span style="color: #dc3545;">✗ Failed</span>';
+          resultHtml += `</div>`;
+          
+          testResultsMessage.innerHTML = resultHtml;
+        } catch (error) {
+          testResultsMessage.className = 'message-box message-error';
+          testResultsMessage.textContent = 'Test failed: ' + error.message;
+        } finally {
+          testBtn.disabled = false;
+          testBtn.innerHTML = '🔍 Test Internet Connectivity';
         }
       }
 
@@ -706,7 +1037,8 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       
       function startLogPolling() {
         if (logInterval) clearInterval(logInterval);
-        logInterval = setInterval(refreshLogs, 3000);
+        // Poll logs every 5 seconds (less aggressive than before)
+        logInterval = setInterval(refreshLogs, 5000);
       }
       
       function stopLogPolling() {
@@ -715,6 +1047,27 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           logInterval = null;
         }
       }
+      
+      // Page visibility management - stop polling when page is hidden
+      document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+          console.log('Page hidden - stopping all polling');
+          stopStatusPolling();
+          stopLogPolling();
+        } else {
+          console.log('Page visible - resuming polling');
+          checkConnectionStatus();
+          refreshLogs();
+          startLogPolling();
+        }
+      });
+      
+      // Clean up intervals when page is unloaded
+      window.addEventListener('beforeunload', function() {
+        console.log('Page unloading - cleaning up');
+        stopStatusPolling();
+        stopLogPolling();
+      });
     </script>
   </body>
 </html>
@@ -723,14 +1076,35 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
+<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
     __version__ = "1.1.4"
+=======
+    __version__ = "1.2.1-beta"
+>>>>>>> version/1.2.0-beta:bt-tether-helper.py
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
+
+    # State constants for detailed status display
+    STATE_IDLE = "IDLE"
+    STATE_INITIALIZING = "INITIALIZING"
+    STATE_SCANNING = "SCANNING"
+    STATE_PAIRING = "PAIRING"
+    STATE_TRUSTING = "TRUSTING"
+    STATE_CONNECTING = "CONNECTING"
+    STATE_CONNECTED = "CONNECTED"
+    STATE_RECONNECTING = "RECONNECTING"
+    STATE_DISCONNECTING = "DISCONNECTING"
+    STATE_UNTRUSTING = "UNTRUSTING"
+    STATE_DISCONNECTED = "DISCONNECTED"
+    STATE_ERROR = "ERROR"
 
     # Timing constants
     BLUETOOTH_SERVICE_STARTUP_DELAY = 3
     MONITOR_INITIAL_DELAY = 5
+    MONITOR_PAUSED_CHECK_INTERVAL = 10  # Check every 10 seconds when paused
     SCAN_DURATION = 30
+    SCAN_DISCOVERY_WAIT = 1  # Wait between scan discovery attempts
+    SCAN_DISCOVERY_MAX_ATTEMPTS = 60  # Max attempts to discover device during scan
     DEVICE_OPERATION_DELAY = 1
     DEVICE_OPERATION_LONGER_DELAY = 2
     SCAN_STOP_DELAY = 0.5
@@ -742,6 +1116,8 @@ class BTTetherHelper(Plugin):
     FALLBACK_INIT_TIMEOUT = 15  # Seconds to wait for on_ready() before fallback init
     PAN_INTERFACE_WAIT = 2  # Seconds to wait for PAN interface after connection
     INTERNET_VERIFY_WAIT = 2  # Seconds to wait before verifying internet connectivity
+    DHCP_KILL_WAIT = 0.5  # Wait after killing dhclient
+    DHCP_RELEASE_WAIT = 1  # Wait after releasing DHCP lease
 
     # Reconnect configuration constants
     DEFAULT_RECONNECT_INTERVAL = 60  # Default seconds between reconnect checks
@@ -755,9 +1131,14 @@ class BTTetherHelper(Plugin):
         """Initialize plugin configuration and data structures only - no heavy operations"""
         from collections import deque
 
-        self.phone_mac = self.options.get("mac", "")
-        self._status = "IDLE"
+        self.phone_mac = ""  # No longer used, keeping for compatibility
+        self._status = self.STATE_IDLE
         self._message = "Ready"
+        self._scanning = False  # Track if we're currently scanning
+        self._last_scan_devices = []  # Store last scan results for web UI
+        self._scan_complete_time = (
+            0  # Track when scan completed for result display window
+        )
         self.lock = threading.Lock()
         self.options["csrf_exempt"] = True  # Disable CSRF for this plugin
         self.agent_process = None  # Track agent process
@@ -821,16 +1202,23 @@ class BTTetherHelper(Plugin):
 
         # Flag to indicate when connection/pairing is in progress
         self._connection_in_progress = False
+        self._connection_start_time = None  # Track when connection started
         # Flag to indicate when disconnecting is in progress
         self._disconnecting = False
+        self._disconnect_start_time = None  # Track when disconnect started
         # Flag to indicate when untrusting is in progress
         self._untrusting = False
+        self._untrust_start_time = None  # Track when untrust started
         # Flag to indicate when plugin is initializing
         self._initializing = True
+
+        # Timeout for stuck operations (2 minutes)
+        self.OPERATION_TIMEOUT = 120
 
         # Monitoring thread for automatic reconnection
         self._monitor_thread = None
         self._monitor_stop = threading.Event()
+        self._monitor_paused = threading.Event()  # Set when no devices to monitor
         self._last_known_connected = False  # Track if we were previously connected
         self._reconnect_failure_count = 0  # Track consecutive reconnect failures
         self._max_reconnect_failures = self.MAX_RECONNECT_FAILURES
@@ -844,6 +1232,21 @@ class BTTetherHelper(Plugin):
         self._screen_needs_refresh = False  # Flag to force immediate screen update
         self._ui_update_timer = None  # Timer for rapid UI updates during transitions
         self._ui_update_active = False  # Flag to prevent multiple timers
+
+        # Cached UI status - updated by background threads, read by on_ui_update
+        # This prevents blocking subprocess calls during UI updates
+        self._cached_ui_status = {
+            "paired": False,
+            "trusted": False,
+            "connected": False,
+            "pan_active": False,
+            "interface": None,
+            "ip_address": None,
+        }
+        self._cached_ui_status_lock = threading.Lock()
+        self._ui_reference = (
+            None  # Store UI reference for triggering updates from threads
+        )
 
         # Device name update configuration
         self._name_update_thread = None
@@ -886,7 +1289,10 @@ class BTTetherHelper(Plugin):
 
     def _initialize_bluetooth_services(self):
         """Initialize Bluetooth services - called by either on_ready() or fallback"""
-        self._initializing = True  # Mark as initializing
+        with self.lock:
+            self._initializing = True  # Mark as initializing inside lock
+            self._screen_needs_refresh = True
+
         try:
             # Kill any lingering bluetoothctl processes to prevent deadlocks
             try:
@@ -923,19 +1329,125 @@ class BTTetherHelper(Plugin):
             self._start_pairing_agent()
 
             # Start connection monitoring thread if auto-reconnect is enabled
-            if self.auto_reconnect and self.phone_mac:
+            # No longer requires phone_mac since we auto-discover trusted devices
+            if self.auto_reconnect:
                 self._start_monitoring_thread()
 
             # Set Bluetooth device name
             self._set_device_name()
 
             self._log("INFO", "Bluetooth services initialized")
-            self._initializing = False  # Mark initialization as complete
+
+            # Auto-connect to trusted devices if available
+            if self.auto_reconnect:
+                self._log("INFO", "Checking for trusted devices to auto-connect...")
+                best_device = self._find_best_device_to_connect(log_results=False)
+                if best_device:
+                    self._log(
+                        "INFO",
+                        f"Found trusted device: {best_device['name']}, starting connection...",
+                    )
+                    # Update cached UI status immediately so screen shows connecting state
+                    self._update_cached_ui_status(mac=best_device["mac"])
+
+                    # Set flags atomically to prevent race condition with on_ui_update
+                    with self.lock:
+                        self._connection_in_progress = True
+                        self._connection_start_time = (
+                            time.time()
+                        )  # Track start time for timeout detection
+                        self._user_requested_disconnect = False
+                        self.phone_mac = best_device["mac"]
+                        self._initializing = (
+                            False  # End initializing AFTER cache update
+                        )
+                        self.status = self.STATE_CONNECTING
+                        self.message = f"Auto-connecting to {best_device['name']}..."
+                        self._screen_needs_refresh = True
+                    self._log(
+                        "INFO",
+                        f"Initialization complete (auto-connect starting) - initializing flag cleared: {not self._initializing}",
+                    )
+
+                    # Unpause monitor since we have a device
+                    self._monitor_paused.clear()
+                    threading.Thread(
+                        target=self._connect_thread, args=(best_device,), daemon=True
+                    ).start()
+                else:
+                    self._log(
+                        "INFO", "No trusted devices found. Pair a device via web UI."
+                    )
+                    # Update cached UI status to show no device
+                    self._update_cached_ui_status(
+                        status={
+                            "paired": False,
+                            "trusted": False,
+                            "connected": False,
+                            "pan_active": False,
+                            "interface": None,
+                            "ip_address": None,
+                        }
+                    )
+                    # No device to connect, end initialization AFTER cache update
+                    with self.lock:
+                        self._initializing = False
+                        self._screen_needs_refresh = True
+
+                    # Force immediate screen update by calling on_ui_update if UI reference available
+                    if self._ui_reference:
+                        try:
+                            self.on_ui_update(self._ui_reference)
+                        except Exception as e:
+                            logging.debug(
+                                f"[bt-tether-helper] Error forcing UI update after init: {e}"
+                            )
+                    self._log(
+                        "INFO",
+                        f"Initialization complete - initializing flag cleared: {not self._initializing}",
+                    )
+            else:
+                # Auto-reconnect disabled, update cached UI then end initialization
+                self._update_cached_ui_status()
+                with self.lock:
+                    self._initializing = False
+                    self._screen_needs_refresh = True
+                self._log(
+                    "INFO",
+                    f"Initialization complete (auto-reconnect disabled) - initializing flag cleared: {not self._initializing}",
+                )
+
+                # Force immediate screen update by calling on_ui_update if UI reference available
+                if self._ui_reference:
+                    try:
+                        self.on_ui_update(self._ui_reference)
+                    except Exception as e:
+                        logging.debug(
+                            f"[bt-tether-helper] Error forcing UI update after init: {e}"
+                        )
         except Exception as e:
             self._log("ERROR", f"Failed to initialize Bluetooth services: {e}")
-            self._initializing = False  # Mark initialization as complete even on error
-
+            # Update cached UI to show current state
+            self._update_cached_ui_status()
+            with self.lock:
+                self._initializing = (
+                    False  # Mark initialization as complete even on error
+                )
+                self._screen_needs_refresh = True
+            self._log(
+                "INFO",
+                f"Initialization error handler - initializing flag cleared: {not self._initializing}",
+            )
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
+
+            # Force immediate screen update by calling on_ui_update if UI reference available
+            if self._ui_reference:
+                try:
+                    self.on_ui_update(self._ui_reference)
+                except Exception as update_error:
+                    logging.debug(
+                        f"[bt-tether-helper] Error forcing UI update after init error: {update_error}"
+                    )
 
     def on_unload(self, ui):
         """Cleanup when plugin is unloaded"""
@@ -957,18 +1469,37 @@ class BTTetherHelper(Plugin):
                 try:
                     self.agent_process.terminate()
                     self.agent_process.wait(timeout=3)
-                except:
+                except subprocess.TimeoutExpired:
+                    logging.warning(
+                        "[bt-tether-helper] Agent didn't terminate, killing..."
+                    )
                     try:
                         self.agent_process.kill()
-                    except:
-                        pass
+                        self.agent_process.wait(timeout=1)
+                    except Exception as kill_err:
+                        logging.error(
+                            f"[bt-tether-helper] Agent kill failed: {kill_err}"
+                        )
+                except Exception as e:
+                    logging.debug(f"[bt-tether-helper] Agent terminate failed: {e}")
 
             # Close agent log file
             if self.agent_log_fd:
                 try:
-                    self.agent_log_fd.close()
-                except:
-                    pass
+                    if isinstance(self.agent_log_fd, int):
+                        os.close(self.agent_log_fd)
+                    else:
+                        self.agent_log_fd.close()
+                    self.agent_log_fd = None
+                except Exception as e:
+                    logging.debug(f"[bt-tether-helper] Failed to close agent log: {e}")
+
+            # Clean up log file
+            if self.agent_log_path and os.path.exists(self.agent_log_path):
+                try:
+                    os.remove(self.agent_log_path)
+                except Exception as e:
+                    logging.debug(f"[bt-tether-helper] Failed to remove agent log: {e}")
 
             self._log("INFO", "Plugin unloaded successfully")
         except Exception as e:
@@ -1017,6 +1548,12 @@ class BTTetherHelper(Plugin):
 
     def on_ui_setup(self, ui):
         """Setup UI elements to display Bluetooth status on screen"""
+<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
+=======
+        # Store UI reference for triggering updates from background threads
+        self._ui_reference = ui
+
+>>>>>>> version/1.2.0-beta:bt-tether-helper.py
         # Mini status indicator (single letter: C/N/P/D)
         if self.show_on_screen and self.show_mini_status:
             # If position not specified, place in top-right of screen
@@ -1052,18 +1589,87 @@ class BTTetherHelper(Plugin):
             )
 
     def on_ui_update(self, ui):
+<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
         """Update Bluetooth status on screen"""
         # Master switch check - if disabled, don't update anything
         if not self.show_on_screen or not self.phone_mac:
+=======
+        """Update Bluetooth status on screen - MUST be non-blocking"""
+        # Master switch check - if disabled, don't update anything
+        if not self.show_on_screen:
+>>>>>>> version/1.2.0-beta:bt-tether-helper.py
             return
 
         try:
-            # Get current state flags atomically
+            # Get current state flags atomically - NEVER call subprocess here
             with self.lock:
                 initializing = self._initializing
                 connection_in_progress = self._connection_in_progress
+                connection_start_time = self._connection_start_time
                 disconnecting = self._disconnecting
+                disconnect_start_time = self._disconnect_start_time
                 untrusting = self._untrusting
+                untrust_start_time = self._untrust_start_time
+                phone_mac = self.phone_mac
+                screen_needs_refresh = self._screen_needs_refresh
+                status_str = self.status
+                message_str = self.message
+                scanning = self._scanning
+                # Clear refresh flag after reading
+                if screen_needs_refresh:
+                    self._screen_needs_refresh = False
+
+            # Debug log for stuck initializing flag
+            if initializing:
+                logging.debug(
+                    f"[bt-tether-helper] on_ui_update() - initializing flag is TRUE, screen_needs_refresh={screen_needs_refresh}"
+                )
+            else:
+                logging.debug(
+                    f"[bt-tether-helper] on_ui_update() - initializing flag is FALSE, will show status: {status_str}"
+                )
+
+            # Get cached status (non-blocking)
+            with self._cached_ui_status_lock:
+                cached_status = self._cached_ui_status.copy()
+
+            # Check for stuck operations and auto-clear them
+            current_time = time.time()
+
+            if connection_in_progress and connection_start_time:
+                if current_time - connection_start_time > self.OPERATION_TIMEOUT:
+                    logging.warning(
+                        f"[bt-tether-helper] Connection timeout ({self.OPERATION_TIMEOUT}s) - clearing stuck flag"
+                    )
+                    with self.lock:
+                        self._connection_in_progress = False
+                        self._connection_start_time = None
+                        self.status = self.STATE_ERROR
+                        self.message = "Connection timeout - operation took too long"
+                        self._screen_needs_refresh = True
+                    # Update cached UI to show error
+                    self._update_cached_ui_status()
+                    connection_in_progress = False
+
+            if disconnecting and disconnect_start_time:
+                if current_time - disconnect_start_time > self.OPERATION_TIMEOUT:
+                    logging.warning(
+                        f"[bt-tether-helper] Disconnect timeout ({self.OPERATION_TIMEOUT}s) - clearing stuck flag"
+                    )
+                    with self.lock:
+                        self._disconnecting = False
+                        self._disconnect_start_time = None
+                    disconnecting = False
+
+            if untrusting and untrust_start_time:
+                if current_time - untrust_start_time > self.OPERATION_TIMEOUT:
+                    logging.warning(
+                        f"[bt-tether-helper] Untrust timeout ({self.OPERATION_TIMEOUT}s) - clearing stuck flag"
+                    )
+                    with self.lock:
+                        self._untrusting = False
+                        self._untrust_start_time = None
+                    untrusting = False
 
             # Handle state transitions first (highest priority)
             # These flags are set during operations and should display immediately
@@ -1072,6 +1678,13 @@ class BTTetherHelper(Plugin):
                     ui.set("bt-status", "I")  # I = Initializing
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Initializing")
+                return
+
+            if scanning:
+                if self.show_mini_status:
+                    ui.set("bt-status", "S")  # S = Scanning
+                if self.show_detailed_status:
+                    ui.set("bt-detail", "BT:Scanning")
                 return
 
             if disconnecting:
@@ -1083,33 +1696,90 @@ class BTTetherHelper(Plugin):
 
             if untrusting:
                 if self.show_mini_status:
+<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
                     ui.set("bt-status", "U")  # U = Untrusting
+=======
+                    ui.set("bt-status", "T")  # T = Untrusting
+>>>>>>> version/1.2.0-beta:bt-tether-helper.py
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Untrusting")
                 return
 
             if connection_in_progress:
+<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
                 if self.show_mini_status:
                     ui.set("bt-status", ">")  # > = Connecting
+=======
+                # Check current status to show appropriate transition state
+                # PAIRING -> TRUSTING -> CONNECTING -> CONNECTED
+                if status_str == self.STATE_CONNECTED:
+                    # Connection actually completed! Fall through to show connected status below
+                    # Don't return - show the actual connection status from cache
+                    pass
+                elif status_str == self.STATE_PAIRING:
+                    if self.show_mini_status:
+                        ui.set("bt-status", "P")  # P = Pairing
+                    if self.show_detailed_status:
+                        ui.set("bt-detail", "BT:Pairing")
+                    return
+                elif status_str == self.STATE_TRUSTING:
+                    if self.show_mini_status:
+                        ui.set("bt-status", "T")  # T = Trusting
+                    if self.show_detailed_status:
+                        ui.set("bt-detail", "BT:Trusting")
+                    return
+                elif status_str == self.STATE_CONNECTING:
+                    if self.show_mini_status:
+                        ui.set("bt-status", ">")  # > = Connecting
+                    if self.show_detailed_status:
+                        ui.set("bt-detail", "BT:Connecting")
+                    return
+                elif status_str == self.STATE_RECONNECTING:
+                    # Check if reconnection actually completed
+                    if cached_status.get("connected") or cached_status.get(
+                        "pan_active"
+                    ):
+                        # Reconnection succeeded! Fall through to show connected status
+                        pass
+                    else:
+                        # Still reconnecting
+                        if self.show_mini_status:
+                            ui.set("bt-status", "R")  # R = Reconnecting
+                        if self.show_detailed_status:
+                            ui.set("bt-detail", "BT:Reconnecting")
+                        return
+                else:
+                    if self.show_mini_status:
+                        ui.set("bt-status", ">")  # > = Connecting (default)
+                    if self.show_detailed_status:
+                        ui.set("bt-detail", "BT:Connecting")
+                    return
+
+            # If no phone_mac is set AND not paired in cached status, show disconnected
+            # (Check cached status to handle race conditions where phone_mac cleared but device still exists)
+            if not phone_mac and not cached_status.get("paired", False):
+                # No device configured yet, show disconnected
+                if self.show_mini_status:
+                    ui.set("bt-status", "X")
+>>>>>>> version/1.2.0-beta:bt-tether-helper.py
                 if self.show_detailed_status:
-                    ui.set("bt-detail", "BT:Connecting")
+                    ui.set("bt-detail", "BT:No device")
                 return
 
-            # Get actual status for stable states
-            status = self._get_current_status(self.phone_mac)
-
-            # Determine display value based on status
+            # Use cached status for display - background thread updates this
             # I = Initializing, > = Connecting/Pairing in progress, U = Untrusting, X = Disconnecting/Disconnected
             # C = Connected (with internet), T = Connected+Trusted (no internet), N = Connected+Untrusted, P = Paired only
-            if status.get("pan_active", False):
+            if cached_status.get("pan_active", False):
                 display = (
                     "C"  # Connected with internet - will show IP in detailed status
                 )
-            elif status.get("connected", False) and status.get("trusted", False):
+            elif cached_status.get("connected", False) and cached_status.get(
+                "trusted", False
+            ):
                 display = "T"  # Connected and trusted but no internet yet
-            elif status.get("connected", False):
+            elif cached_status.get("connected", False):
                 display = "N"  # Connected but not trusted
-            elif status.get("paired", False):
+            elif cached_status.get("paired", False):
                 display = "P"  # Paired but not connected
             else:
                 display = "X"  # Disconnected
@@ -1121,7 +1791,7 @@ class BTTetherHelper(Plugin):
             # Update detailed status line if enabled
             if self.show_detailed_status:
                 try:
-                    detailed = self._format_detailed_status(status)
+                    detailed = self._format_detailed_status(cached_status)
                     ui.set("bt-detail", detailed)
                 except Exception as detail_error:
                     logging.debug(
@@ -1139,8 +1809,8 @@ class BTTetherHelper(Plugin):
                     ui.set("bt-status", "?")
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Error")
-            except:
-                pass
+            except Exception as ui_err:
+                logging.debug(f"[bt-tether-helper] Failed to set error UI: {ui_err}")
 
     def _format_detailed_status(self, status):
         """Format detailed status line for screen display"""
@@ -1157,14 +1827,26 @@ class BTTetherHelper(Plugin):
         pan_active = status.get("pan_active", False)
         ip_address = status.get("ip_address", None)
 
+        # Get status for more specific messaging
+        with self.lock:
+            status_str = self.status
+
         # Build status string
         if disconnecting:
             return "BT:Disconnecting..."
         elif untrusting:
             return "BT:Untrusting..."
         elif connection_in_progress:
-            return "BT:Connecting..."
-        elif pan_active:
+            # If we're already connected, show actual status instead of "Connecting"
+            if status_str == "CONNECTED":
+                pass  # Fall through to show actual connected status
+            elif status_str == "RECONNECTING":
+                return "BT:Reconnecting..."
+            else:
+                return "BT:Connecting..."
+
+        # Show actual connection status
+        if pan_active:
             # Connected via PAN - show IP if available, otherwise just "Connected"
             if ip_address:
                 return f"BT:{ip_address}"
@@ -1182,6 +1864,37 @@ class BTTetherHelper(Plugin):
         else:
             # Disconnected
             return "BT:Disconnected"
+
+    def _update_cached_ui_status(self, status=None, mac=None):
+        """Update the cached UI status from a background thread.
+        This is the ONLY place that should call _get_current_status or do blocking I/O.
+        """
+        try:
+            if status is None:
+                # Fetch fresh status if not provided
+                target_mac = mac if mac else self.phone_mac
+                if target_mac:
+                    status = self._get_current_status(target_mac)
+                else:
+                    status = {
+                        "paired": False,
+                        "trusted": False,
+                        "connected": False,
+                        "pan_active": False,
+                        "interface": None,
+                        "ip_address": None,
+                    }
+
+            # Update the cached status thread-safely
+            with self._cached_ui_status_lock:
+                self._cached_ui_status = status.copy()
+
+            # Mark that screen needs refresh
+            with self.lock:
+                self._screen_needs_refresh = True
+
+        except Exception as e:
+            logging.debug(f"[bt-tether-helper] Failed to update cached UI status: {e}")
 
     def _start_pairing_agent(self):
         """Start a persistent bluetoothctl agent to handle pairing requests"""
@@ -1233,9 +1946,21 @@ default-agent
             logging.info(
                 f"[bt-tether-helper] 🔑 Passkeys will appear in: {self.agent_log_path}"
             )
-
         except Exception as e:
             logging.error(f"[bt-tether-helper] Failed to start pairing agent: {e}")
+            # Clean up on failure
+            if self.agent_log_fd:
+                try:
+                    os.close(self.agent_log_fd)
+                except:
+                    pass
+                self.agent_log_fd = None
+            if self.agent_log_path and os.path.exists(self.agent_log_path):
+                try:
+                    os.remove(self.agent_log_path)
+                except:
+                    pass
+                self.agent_log_path = None
 
     def _start_monitoring_thread(self):
         """Start background thread to monitor connection and auto-reconnect if dropped"""
@@ -1284,8 +2009,45 @@ default-agent
                     time.sleep(self.reconnect_interval)
                     continue
 
-                # Check current connection status
-                status = self._get_full_connection_status(self.phone_mac)
+                # Find the best device to monitor/reconnect to
+                # Don't log results to reduce spam when already connected
+                best_device = self._find_best_device_to_connect(log_results=False)
+
+                if not best_device:
+                    # No suitable devices - pause monitoring but periodically recheck
+                    if not self._monitor_paused.is_set():
+                        self._log(
+                            "INFO", "No trusted devices to monitor. Monitor paused."
+                        )
+                        self._monitor_paused.set()
+                    # Silently recheck every 60s when paused (no logging)
+
+                    # Sleep and then recheck for devices (don't wait indefinitely)
+                    time.sleep(self.reconnect_interval)
+                    # Don't clear pause flag yet - keep it set until we find a device
+                    continue
+
+                current_mac = best_device["mac"]
+                device_name = best_device["name"]
+
+                # Clear paused flag since we found a device
+                if self._monitor_paused.is_set():
+                    self._monitor_paused.clear()
+                    logging.info(
+                        f"[bt-tether-helper] Monitor resumed - found device: {device_name}"
+                    )
+
+                # Check current connection status for this device
+                status = self._get_full_connection_status(current_mac)
+
+                # Update cached UI status for the display (non-blocking for on_ui_update)
+                self._update_cached_ui_status(status=status, mac=current_mac)
+
+                # Only log monitoring status if not connected (reduce spam)
+                if not status["connected"]:
+                    self._log(
+                        "DEBUG", f"Monitoring device: {device_name} ({current_mac})"
+                    )
 
                 # Detect if connection was dropped (was connected, now not)
                 # Don't auto-reconnect if user manually disconnected
@@ -1298,23 +2060,56 @@ default-agent
                     and not user_requested_disconnect
                 ):
                     logging.warning(
-                        "[bt-tether-helper] Connection dropped! Attempting to reconnect..."
+                        f"[bt-tether-helper] Connection to {device_name} dropped! Attempting to reconnect..."
                     )
+
+                    # First show DISCONNECTED status on screen
                     with self.lock:
-                        self.status = "RECONNECTING"
-                        self.message = "Connection lost, reconnecting..."
+                        self.status = self.STATE_DISCONNECTED
+                        self.message = f"Connection to {device_name} dropped"
                         self._screen_needs_refresh = True
 
-                    # Attempt to reconnect
-                    self._reconnect_device()
+                    # Force cached UI to show disconnected (clear any lingering IP/interface)
+                    self._update_cached_ui_status(
+                        status={
+                            "paired": True,
+                            "trusted": True,
+                            "connected": False,
+                            "pan_active": False,
+                            "interface": None,
+                            "ip_address": None,
+                        },
+                        mac=current_mac,
+                    )
 
-                # Update last known state
-                self._last_known_connected = status["connected"]
+                    # Now set to RECONNECTING and attempt to reconnect
+                    with self.lock:
+                        self.status = self.STATE_RECONNECTING
+                        self.message = (
+                            f"Connection lost to {device_name}, reconnecting..."
+                        )
+                        self._connection_in_progress = True
+                        self._connection_start_time = time.time()
+                        self._initializing = (
+                            False  # Ensure initializing flag is cleared
+                        )
+                        self._screen_needs_refresh = True
+
+                    # Attempt to reconnect to this device
+                    success = self._reconnect_device()
+
+                    if success:
+                        # Update phone_mac to the device we successfully connected to
+                        self.phone_mac = current_mac
+                        self.options["mac"] = self.phone_mac
 
                 # Force screen refresh if connection state changed
                 if self._last_known_connected != status["connected"]:
                     with self.lock:
                         self._screen_needs_refresh = True
+
+                # Update last known state (do this AFTER checking for changes)
+                self._last_known_connected = status["connected"]
 
                 # Only try to reconnect if device is BOTH paired AND trusted (and not blocked)
                 # Also check if we haven't exceeded max failures and user didn't manually disconnect
@@ -1331,12 +2126,21 @@ default-agent
                     and not user_requested_disconnect
                 ):
                     logging.info(
-                        "[bt-tether-helper] Device is paired/trusted but not connected. Attempting connection..."
+                        f"[bt-tether-helper] Device {device_name} is paired/trusted but not connected. Attempting connection..."
                     )
                     with self.lock:
-                        self.status = "CONNECTING"
-                        self.message = "Reconnecting to device..."
+                        self.status = self.STATE_CONNECTING
+                        self.message = f"Reconnecting to {device_name}..."
+                        self._connection_in_progress = True
+                        self._connection_start_time = time.time()
+                        self._initializing = (
+                            False  # Ensure initializing flag is cleared
+                        )
                         self._screen_needs_refresh = True
+
+                    # Update cached UI to show disconnected immediately before reconnecting
+                    # This ensures the UI shows the transition through the connecting state
+                    self._update_cached_ui_status(status=status, mac=current_mac)
 
                     success = self._reconnect_device()
 
@@ -1344,12 +2148,17 @@ default-agent
                         # Reset failure counter on successful connection
                         self._reconnect_failure_count = 0
                         self._first_failure_time = None
+                        # Update phone_mac to the successful device
+                        self.phone_mac = current_mac
+                        self.options["mac"] = self.phone_mac
                     else:
                         # Increment failure counter
                         self._reconnect_failure_count += 1
                         # Track when failures started
                         if self._first_failure_time is None:
                             self._first_failure_time = time.time()
+                        # Update cached UI to show disconnected state after failure
+                        self._update_cached_ui_status(mac=current_mac)
                         if (
                             self._reconnect_failure_count
                             >= self._max_reconnect_failures
@@ -1363,8 +2172,11 @@ default-agent
                                 f"📱 Will retry after {self._reconnect_failure_cooldown}s cooldown, or reconnect manually via web UI",
                             )
                             with self.lock:
-                                self.status = "DISCONNECTED"
+                                self.status = self.STATE_DISCONNECTED
                                 self.message = f"Auto-reconnect paused - retrying in {self._reconnect_failure_cooldown}s"
+                                self._connection_in_progress = (
+                                    False  # Clear flag to show proper status
+                                )
                                 self._screen_needs_refresh = True
                 elif self._reconnect_failure_count >= self._max_reconnect_failures:
                     # Already exceeded max failures - check if cooldown period has elapsed
@@ -1400,14 +2212,26 @@ default-agent
     def _reconnect_device(self):
         """Attempt to reconnect to a previously paired device"""
         try:
-            mac = self.phone_mac
-            if not mac:
-                self._log("ERROR", "No MAC address configured for reconnection")
-                return False
+            # Find best device if no MAC is set
+            if not self.phone_mac:
+                best_device = self._find_best_device_to_connect()
+                if not best_device:
+                    self._log("DEBUG", "No trusted devices found for reconnection")
+                    return False
+                mac = best_device["mac"]
+                self.phone_mac = mac
+            else:
+                mac = self.phone_mac
 
             # Set flag to prevent concurrent operations
             with self.lock:
                 self._connection_in_progress = True
+                self._connection_start_time = (
+                    time.time()
+                )  # Track start time for timeout detection
+                self._initializing = (
+                    False  # Ensure initializing flag is cleared during reconnection
+                )
 
             self._log("INFO", f"Reconnecting to {mac}...")
 
@@ -1479,46 +2303,98 @@ default-agent
                                 "ERROR", f"Failed to send Discord notification: {e}"
                             )
 
-                        # Update status and force screen refresh
+                        # Update cached UI status FIRST while flag is still True
+                        self._update_cached_ui_status(mac=mac)
+
+                        # Then update status and clear flags
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"✓ Reconnected! Internet via {iface}"
+                            self._connection_in_progress = False
+                            self._connection_start_time = None
+                            self._initializing = False
                             self._screen_needs_refresh = True
                         return True
                     else:
                         logging.warning(
                             f"[bt-tether-helper] Reconnected but no internet detected"
                         )
+                        # Update cached UI status FIRST while flag is still True
+                        self._update_cached_ui_status(mac=mac)
+
+                        # Then update status and clear flags
                         with self.lock:
                             self.status = "CONNECTED"
                             self.message = f"Reconnected via {iface} but no internet"
+                            self._connection_in_progress = False
+                            self._connection_start_time = None
+                            self._initializing = False
                             self._screen_needs_refresh = True
                         return True
                 else:
                     logging.warning(
                         f"[bt-tether-helper] NAP connected but no interface detected"
                     )
+                    # Update cached UI status FIRST while flag is still True
+                    self._update_cached_ui_status(mac=mac)
+
+                    # Then update status and clear flags
                     with self.lock:
                         self.status = "CONNECTED"
                         self.message = "Reconnected but no PAN interface"
+                        self._connection_in_progress = False
+                        self._connection_start_time = None
+                        self._initializing = False
                         self._screen_needs_refresh = True
                     return True
             else:
                 logging.warning(f"[bt-tether-helper] Reconnection failed")
                 with self.lock:
-                    self.status = "ERROR"
+                    self.status = self.STATE_DISCONNECTED
                     self.message = "Reconnection failed. Will retry later."
+                    self._connection_in_progress = False  # Clear flag immediately
+                    self._initializing = False  # Clear initializing flag
+                    self._screen_needs_refresh = True
+                # Force cached UI to show disconnected (clear any lingering IP/interface)
+                self._update_cached_ui_status(
+                    status={
+                        "paired": True,
+                        "trusted": True,
+                        "connected": False,
+                        "pan_active": False,
+                        "interface": None,
+                        "ip_address": None,
+                    },
+                    mac=mac,
+                )
                 return False
 
         except Exception as e:
             logging.error(f"[bt-tether-helper] Reconnection error: {e}")
             with self.lock:
-                self.status = "ERROR"
+                self.status = self.STATE_DISCONNECTED
                 self.message = f"Reconnection error: {str(e)[:50]}"
+                self._connection_in_progress = False  # Clear flag immediately
+                self._initializing = False  # Clear initializing flag
+                self._screen_needs_refresh = True
+            # Force cached UI to show disconnected (clear any lingering IP/interface)
+            self._update_cached_ui_status(
+                status={
+                    "paired": True,
+                    "trusted": True,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                    "ip_address": None,
+                },
+                mac=mac,
+            )
             return False
         finally:
+            # Ensure flag is cleared
             with self.lock:
-                self._connection_in_progress = False
+                if self._connection_in_progress:
+                    self._connection_in_progress = False
 
     def _monitor_agent_log_for_passkey(self, passkey_found_event):
         """Monitor agent log file for passkey display in real-time and auto-confirm"""
@@ -1619,26 +2495,6 @@ default-agent
         except Exception as e:
             self._log("ERROR", f"Error monitoring agent log: {e}")
 
-    def _start_rapid_ui_updates(self):
-        """Mark that UI should show transition state - called when state changes"""
-        # Note: We can't force pwnagotchi to refresh the screen from a plugin.
-        # The on_ui_update() method is called by the framework at its own interval.
-        # We just ensure the state flags are set so on_ui_update() shows the right status.
-        pass
-
-    def _rapid_ui_update(self):
-        """No-op - kept for compatibility with existing code that calls it"""
-        # The pwnagotchi framework controls when on_ui_update() is called.
-        # We can't force screen updates from a plugin.
-        pass
-
-    def _stop_rapid_ui_updates(self):
-        """Stop rapid UI updates"""
-        self._ui_update_active = False
-        if self._ui_update_timer:
-            self._ui_update_timer.cancel()
-            self._ui_update_timer = None
-
     def on_webhook(self, path, request):
         try:
             # Normalize path by stripping leading slash
@@ -1654,16 +2510,113 @@ default-agent
                         discord_webhook_url=self.discord_webhook_url,
                     )
 
+            if clean_path == "trusted-devices":
+                devices = self._get_trusted_devices()
+                return jsonify({"devices": devices})
+
             if clean_path == "connect":
                 mac = request.args.get("mac", "").strip().upper()
+
+                # If MAC provided, use it; otherwise find best device automatically
                 if mac and self._validate_mac(mac):
                     with self.lock:
                         self.phone_mac = mac
                         self.options["mac"] = self.phone_mac
                     self.start_connection()
-                    return jsonify({"success": True, "message": "Connection started"})
+                    # Force immediate screen update to show connecting state
+                    if self._ui_reference:
+                        try:
+                            self.on_ui_update(self._ui_reference)
+                        except Exception as e:
+                            logging.debug(
+                                f"[bt-tether-helper] Error forcing UI update on connect: {e}"
+                            )
+                    return jsonify(
+                        {"success": True, "message": f"Connection started to {mac}"}
+                    )
                 else:
-                    return jsonify({"success": False, "message": "Invalid MAC"})
+                    # No MAC or invalid MAC - use smart device selection
+                    best_device = self._find_best_device_to_connect()
+                    if best_device:
+                        with self.lock:
+                            self.phone_mac = best_device["mac"]
+                            self.options["mac"] = self.phone_mac
+                        self.start_connection()
+                        # Force immediate screen update to show connecting state
+                        if self._ui_reference:
+                            try:
+                                self.on_ui_update(self._ui_reference)
+                            except Exception as e:
+                                logging.debug(
+                                    f"[bt-tether-helper] Error forcing UI update on connect: {e}"
+                                )
+                        return jsonify(
+                            {
+                                "success": True,
+                                "message": f"Connection started to {best_device['name']} ({best_device['mac']})",
+                            }
+                        )
+                    else:
+                        return jsonify(
+                            {
+                                "success": False,
+                                "message": "No suitable devices found - pair a device first or set MAC address",
+                            }
+                        )
+
+            if clean_path == "pair-device":
+                mac = request.args.get("mac", "").strip().upper()
+                if mac and self._validate_mac(mac):
+                    with self.lock:
+                        self.phone_mac = mac
+                        self.options["mac"] = self.phone_mac
+
+                        # Check if connection is already in progress
+                        if self._connection_in_progress:
+                            return jsonify(
+                                {
+                                    "success": False,
+                                    "message": "Connection already in progress",
+                                }
+                            )
+
+                        # Clear scanning flag and set connection in progress
+                        self._scanning = False
+                        self._connection_in_progress = True
+                        self._connection_start_time = time.time()
+                        self._user_requested_disconnect = False
+                        self._screen_needs_refresh = True
+
+                    # Reset failure counter
+                    self._reconnect_failure_count = 0
+
+                    # Unpause monitor
+                    self._monitor_paused.clear()
+
+                    # Create device info for unpaired device (will be paired during connection)
+                    device_info = {
+                        "mac": mac,
+                        "name": request.args.get("name", "Unknown Device"),
+                        "paired": False,
+                        "trusted": False,
+                        "connected": False,
+                        "has_nap": True,  # Assume it has NAP, will be verified during connection
+                    }
+
+                    # Start connection thread directly with device info
+                    threading.Thread(
+                        target=self._connect_thread, args=(device_info,), daemon=True
+                    ).start()
+
+                    # Force immediate screen update to show pairing state
+                    if self._ui_reference:
+                        self.on_ui_update(self._ui_reference)
+
+                    return jsonify(
+                        {"success": True, "message": f"Pairing started with {mac}"}
+                    )
+                else:
+                    return jsonify({"success": False, "message": "Invalid MAC address"})
 
             if clean_path == "status":
                 with self.lock:
@@ -1674,6 +2627,8 @@ default-agent
                             "mac": self.phone_mac,
                             "disconnecting": self._disconnecting,
                             "untrusting": self._untrusting,
+                            "initializing": self._initializing,
+                            "connection_in_progress": self._connection_in_progress,
                         }
                     )
 
@@ -1684,6 +2639,10 @@ default-agent
                     with self.lock:
                         self._user_requested_disconnect = True
                         self._disconnecting = True
+                        self._disconnect_start_time = (
+                            time.time()
+                        )  # Track when disconnect started
+                        self._screen_needs_refresh = True
 
                     # Run disconnect in background thread so UI can update
                     def do_disconnect():
@@ -1700,6 +2659,15 @@ default-agent
 
                     thread = threading.Thread(target=do_disconnect, daemon=True)
                     thread.start()
+
+                    # Force immediate screen update by calling on_ui_update if UI reference available
+                    if self._ui_reference:
+                        try:
+                            self.on_ui_update(self._ui_reference)
+                        except Exception as e:
+                            logging.debug(
+                                f"[bt-tether-helper] Error forcing UI update on disconnect: {e}"
+                            )
 
                     # Return immediately so pwnagotchi UI can refresh
                     return jsonify({"success": True, "message": "Disconnect started"})
@@ -1723,8 +2691,58 @@ default-agent
                     return jsonify({"paired": False, "connected": False})
 
             if clean_path == "scan":
-                devices = self._scan_devices()
-                return jsonify({"devices": devices})
+                current_time = time.time()
+                with self.lock:
+                    # If already scanning, return current results
+                    if self._scanning:
+                        devices_to_return = self._last_scan_devices.copy()
+                        return jsonify({"devices": devices_to_return})
+
+                    # Not scanning - check if results are still fresh (< 5 seconds old)
+                    # This lets web UI display results without triggering new scans
+                    if (
+                        self._scan_complete_time
+                        and (current_time - self._scan_complete_time) < 5
+                    ):
+                        devices_to_return = self._last_scan_devices.copy()
+                        return jsonify({"devices": devices_to_return})
+
+                    # Results are stale or no previous scan - start a new one
+                    self._last_scan_devices = []
+                    self._scan_complete_time = 0
+                    self._scanning = True
+                    self._screen_needs_refresh = True
+
+                # Run scan in background thread
+                def run_scan_bg():
+                    try:
+                        devices = self._scan_devices()
+                        with self.lock:
+                            self._last_scan_devices = devices
+                            self._scan_complete_time = time.time()
+                        logging.info(
+                            f"[bt-tether-helper] Scan complete, found {len(devices)} devices"
+                        )
+                    except Exception as e:
+                        logging.error(f"[bt-tether-helper] Background scan error: {e}")
+                    finally:
+                        with self.lock:
+                            self._scanning = False
+
+                thread = threading.Thread(target=run_scan_bg, daemon=True)
+                thread.start()
+
+                # Force immediate screen update to show scanning state
+                if self._ui_reference:
+                    try:
+                        self.on_ui_update(self._ui_reference)
+                    except Exception as e:
+                        logging.debug(
+                            f"[bt-tether-helper] Error forcing UI update: {e}"
+                        )
+
+                # Return empty list so UI knows scan started
+                return jsonify({"devices": []})
 
             if clean_path == "connection-status":
                 mac = request.args.get("mac", "").strip().upper()
@@ -1738,6 +2756,9 @@ default-agent
                             "trusted": False,
                             "connected": False,
                             "pan_active": False,
+                            "interface": None,
+                            "ip_address": None,
+                            "default_route_interface": None,
                         }
                     )
 
@@ -1766,8 +2787,28 @@ default-agent
             # Set flags to stop auto-reconnect and indicate disconnecting state
             with self.lock:
                 self._user_requested_disconnect = True
-                self._connection_in_progress = True
+                # Don't set _connection_in_progress during disconnect - causes "Connecting" to show
                 self._disconnecting = True  # Set disconnecting flag for UI
+                self._disconnect_start_time = time.time()  # Track disconnect start time
+                self._initializing = False  # Clear initializing flag
+                self.status = self.STATE_DISCONNECTING  # Set status for consistency
+                self.message = f"Disconnecting from device..."
+                self._screen_needs_refresh = (
+                    True  # Force screen update to show disconnecting
+                )
+
+            # Update cached UI to show disconnecting state immediately
+            self._update_cached_ui_status(
+                status={
+                    "paired": True,
+                    "trusted": True,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                    "ip_address": None,
+                },
+                mac=mac,
+            )
 
             # Wait briefly for any ongoing reconnect to complete
             time.sleep(0.5)
@@ -1815,16 +2856,44 @@ default-agent
 
             # Remove trust to prevent automatic reconnection
             self._log("INFO", "Removing trust to prevent auto-reconnect...")
-            with self.lock:
-                self._disconnecting = False  # Clear disconnecting, now untrusting
-                self._untrusting = True  # Show untrusting state
+            # Keep showing "Disconnecting" state throughout the entire cleanup process
+            # No need to switch to "Untrusting" state - it's all part of disconnect
+
+            # Update cached UI to show untrusting state
+            self._update_cached_ui_status(
+                status={
+                    "paired": True,
+                    "trusted": False,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                    "ip_address": None,
+                },
+                mac=mac,
+            )
 
             trust_result = self._run_cmd(["bluetoothctl", "untrust", mac], capture=True)
             self._log("INFO", f"Untrust result: {trust_result}")
             time.sleep(self.DEVICE_OPERATION_DELAY)
+
+            # Update cached UI status after untrust but before clearing flag
+            self._update_cached_ui_status(
+                status={
+                    "paired": True,
+                    "trusted": False,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                    "ip_address": None,
+                },
+                mac=mac,
+            )
+
             with self.lock:
-                self._untrusting = False  # Clear untrusting state
-                self._screen_needs_refresh = True  # Force screen update after untrust
+                # Keep disconnecting state throughout - don't switch states
+                self._disconnect_start_time = time.time()
+                self.message = f"Finalizing disconnect..."
+                self._screen_needs_refresh = True
 
             # Block the device BEFORE removing it to prevent reconnection attempts
             self._log("INFO", "Blocking device to prevent reconnection...")
@@ -1844,13 +2913,39 @@ default-agent
                 "INFO", f"Device {mac} disconnected, blocked and removed successfully"
             )
 
-            # Update internal state
+            # Update cached UI status to disconnected state FIRST
+            self._update_cached_ui_status(
+                status={
+                    "paired": False,
+                    "trusted": False,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                    "ip_address": None,
+                }
+            )
+
+            # Then update internal state
             with self.lock:
-                self.status = "DISCONNECTED"
-                self.message = "Device disconnected and blocked"
+                self.status = self.STATE_DISCONNECTED
+                self.message = "No device"  # Show "No device" when fully disconnected
+                self._disconnecting = False  # Clear disconnecting flag
+                self._disconnect_start_time = None
                 self._last_known_connected = False
+                # Clear phone_mac so monitor doesn't try to reconnect
+                self.phone_mac = None
                 # Clear passkey after disconnect
                 self.current_passkey = None
+                self._screen_needs_refresh = True
+
+            # Force immediate screen update to show fully disconnected state
+            if self._ui_reference:
+                try:
+                    self.on_ui_update(self._ui_reference)
+                except Exception as e:
+                    logging.debug(
+                        f"[bt-tether-helper] Error forcing UI update on disconnected: {e}"
+                    )
 
             # Return success
             return {
@@ -1859,13 +2954,22 @@ default-agent
             }
         except Exception as e:
             self._log("ERROR", f"Disconnect error: {e}")
+            # Update cached UI status to show error FIRST
+            self._update_cached_ui_status()
+
+            with self.lock:
+                self.status = "ERROR"
+                self.message = f"Disconnect failed: {str(e)[:50]}"
+                self._initializing = False  # Clear initializing flag
+                self._screen_needs_refresh = True
             return {"success": False, "message": f"Disconnect failed: {str(e)}"}
         finally:
             # Always clear the flags, even if disconnect fails
             with self.lock:
-                self._connection_in_progress = False
                 self._disconnecting = False
+                self._disconnect_start_time = None
                 self._untrusting = False
+                self._untrust_start_time = None
 
     def _unpair_device(self, mac):
         """Unpair a Bluetooth device"""
@@ -1889,11 +2993,15 @@ default-agent
 
                 # Update internal state
                 with self.lock:
-                    self.status = "DISCONNECTED"
+                    self.status = self.STATE_DISCONNECTED
                     self.message = "Device unpaired"
                     self._last_known_connected = False
                     # Clear passkey after unpair
                     self.current_passkey = None
+                    self._screen_needs_refresh = True
+
+                # Update cached UI status
+                self._update_cached_ui_status()
 
                 return {
                     "success": True,
@@ -1975,10 +3083,10 @@ default-agent
                                 "interface": "bnep0",
                                 "ip_address": ip_address,
                             }
-                    except:
-                        pass
-            except:
-                pass
+                    except Exception as ip_err:
+                        logging.debug(f"[bt-tether-helper] IP check failed: {ip_err}")
+            except Exception as bnep_err:
+                logging.debug(f"[bt-tether-helper] bnep check failed: {bnep_err}")
 
             # Quick bluetoothctl check with minimal timeout
             try:
@@ -2003,8 +3111,8 @@ default-agent
                         "interface": None,
                         "ip_address": None,
                     }
-            except:
-                pass
+            except Exception as bt_err:
+                logging.debug(f"[bt-tether-helper] bluetoothctl check failed: {bt_err}")
 
             # Fallback to disconnected if all checks fail
             return {
@@ -2028,24 +3136,151 @@ default-agent
             }
 
     def _get_full_connection_status(self, mac):
-        """Get complete connection status - simplified without cache"""
-        # Just use the current status method for consistency
-        return self._get_current_status(mac)
+        """Get complete connection status for web UI - includes additional fields"""
+        # Get base status
+        status = self._get_current_status(mac)
+
+        # Add default_route_interface for web UI display
+        try:
+            status["default_route_interface"] = self._get_default_route_interface()
+        except Exception as e:
+            logging.debug(
+                f"[bt-tether-helper] Failed to get default route interface: {e}"
+            )
+            status["default_route_interface"] = None
+
+        return status
+
+    def _get_trusted_devices(self):
+        """Get list of all trusted Bluetooth devices with their info"""
+        try:
+            trusted_devices = []
+
+            # Get list of all paired devices
+            devices_output = self._run_cmd(
+                ["bluetoothctl", "devices", "Paired"], capture=True, timeout=10
+            )
+
+            if not devices_output or devices_output == "Timeout":
+                return trusted_devices
+
+            # Check each device for trust status and get detailed info
+            for line in devices_output.split("\n"):
+                if line.strip() and line.startswith("Device"):
+                    parts = line.strip().split(" ", 2)
+                    if len(parts) >= 2:
+                        mac = parts[1]
+                        name = parts[2] if len(parts) > 2 else "Unknown Device"
+
+                        # Get device info to check trust status and capabilities
+                        info = self._run_cmd(
+                            ["bluetoothctl", "info", mac], capture=True, timeout=5
+                        )
+                        if info and "Trusted: yes" in info:
+                            # Parse additional device info
+                            device_info = {
+                                "mac": mac,
+                                "name": name,
+                                "trusted": True,
+                                "paired": "Paired: yes" in info,
+                                "connected": "Connected: yes" in info,
+                                "has_nap": "00001116-0000-1000-8000-00805f9b34fb"
+                                in info,  # NAP UUID
+                            }
+                            trusted_devices.append(device_info)
+
+            return trusted_devices
+
+        except Exception as e:
+            self._log("ERROR", f"Failed to get trusted devices: {e}")
+            return []
+
+    def _find_best_device_to_connect(self, log_results=True):
+        """Find the best device to connect to (trusted devices first, then configured MAC)
+
+        Args:
+            log_results: Whether to log the results (default True, set False to reduce spam)
+        """
+        try:
+            # First check for trusted devices with NAP capability
+            trusted_devices = self._get_trusted_devices()
+
+            # Filter for devices that support NAP (tethering)
+            nap_devices = [d for d in trusted_devices if d["has_nap"]]
+
+            if nap_devices:
+                if log_results:
+                    self._log(
+                        "INFO",
+                        f"Found {len(nap_devices)} trusted device(s) with tethering capability",
+                    )
+
+                # Prioritization logic:
+                # 1. Currently connected devices first
+                # 2. Devices that match configured MAC (if any)
+                # 3. First available device
+
+                connected_devices = [d for d in nap_devices if d["connected"]]
+                if connected_devices:
+                    device = connected_devices[0]
+                    if log_results:
+                        self._log(
+                            "INFO",
+                            f"Using already connected device: {device['name']} ({device['mac']})",
+                        )
+                    return device
+
+                # If we have a configured MAC, prefer it if it's in the trusted list
+                if self.phone_mac:
+                    for device in nap_devices:
+                        if device["mac"].upper() == self.phone_mac.upper():
+                            self._log(
+                                "INFO",
+                                f"Using configured trusted device: {device['name']} ({device['mac']})",
+                            )
+                            return device
+
+                # Return first available NAP device
+                device = nap_devices[0]
+                self._log(
+                    "INFO",
+                    f"Auto-selected NAP device: {device['name']} ({device['mac']})",
+                )
+                return device
+
+            # No devices found
+            # Only warn if explicitly requested to log results
+            if log_results:
+                self._log(
+                    "WARNING",
+                    "No trusted devices with tethering capability found",
+                )
+            return None
+
+        except Exception as e:
+            self._log("ERROR", f"Failed to find best device: {e}")
+            return None
 
     def _scan_devices(self):
         """Scan for Bluetooth devices and return list with MACs and names"""
         try:
             logging.info("[bt-tether-helper] Starting device scan...")
 
+            # Set scanning flag for UI display
+            with self.lock:
+                self._scanning = True
+                self._screen_needs_refresh = True
+
             # Power on bluetooth
             self._run_cmd(["bluetoothctl", "power", "on"], capture=True)
-            time.sleep(1)
+            time.sleep(self.DEVICE_OPERATION_DELAY)
 
             # Start scanning
             self._log("INFO", "Starting scan...")
             # Use subprocess directly to prevent [CHG] messages in logs
+            scan_process = None
             try:
-                subprocess.Popen(
+                scan_process = subprocess.Popen(
                     ["bluetoothctl", "scan", "on"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
@@ -2053,22 +3288,47 @@ default-agent
             except Exception as e:
                 self._log("DEBUG", f"Failed to start scan: {e}")
 
-            # Scan for configured duration
-            time.sleep(self.SCAN_DURATION)
+            # Scan for configured duration - periodically refresh screen flag
+            scan_start = time.time()
+            while time.time() - scan_start < self.SCAN_DURATION:
+                time.sleep(1)
+                # Keep refreshing the screen flag so pwnagotchi knows to update
+                with self.lock:
+                    self._screen_needs_refresh = True
 
             # Get devices
             devices_output = self._run_cmd(["bluetoothctl", "devices"], capture=True)
 
             # Stop scanning
             try:
-                subprocess.Popen(
+                stop_process = subprocess.Popen(
                     ["bluetoothctl", "scan", "off"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
+                stop_process.wait(timeout=2)
                 time.sleep(self.SCAN_STOP_DELAY)
+            except subprocess.TimeoutExpired:
+                logging.debug("[bt-tether-helper] Scan stop timed out")
+                if "stop_process" in locals():
+                    stop_process.kill()
             except Exception as e:
-                self._log("DEBUG", f"Failed to stop scan: {e}")
+                logging.error(f"[bt-tether-helper] Failed to stop scan: {e}")
+            finally:
+                # Clear scanning flag
+                with self.lock:
+                    self._scanning = False
+                    self._screen_needs_refresh = True
+                # Clean up scan process if it exists
+                if scan_process:
+                    try:
+                        if scan_process.poll() is None:
+                            scan_process.terminate()
+                            scan_process.wait(timeout=1)
+                    except Exception as e:
+                        logging.debug(
+                            f"[bt-tether-helper] Failed to clean up scan process: {e}"
+                        )
 
             devices = []
             if devices_output:
@@ -2092,10 +3352,18 @@ default-agent
 
     def start_connection(self):
         with self.lock:
-            if not self.phone_mac:
+            # Find the best device to connect to (trusted devices or configured MAC)
+            best_device = self._find_best_device_to_connect()
+
+            if not best_device:
                 self.status = "ERROR"
-                self.message = "No MAC address set"
+                self.message = "No trusted devices found - scan and pair a device first"
+                self._screen_needs_refresh = True
                 return
+
+            # Update current target MAC
+            self.phone_mac = best_device["mac"]
+            self.options["mac"] = self.phone_mac
 
             # Check if connection is already in progress (prevents multiple threads)
             if self._connection_in_progress:
@@ -2104,6 +3372,7 @@ default-agent
                     "Connection already in progress, ignoring duplicate request",
                 )
                 self.message = "Connection already in progress"
+                self._screen_needs_refresh = True
                 return
 
             if self.status in ["PAIRING", "CONNECTING"]:
@@ -2111,22 +3380,40 @@ default-agent
                     "WARNING", "Already pairing/connecting, ignoring duplicate request"
                 )
                 self.message = "Connection already in progress"
+                self._screen_needs_refresh = True
                 return
 
             # Set flag INSIDE the lock to prevent race condition
             self._connection_in_progress = True
+            self._connection_start_time = time.time()  # Track when connection started
             self._user_requested_disconnect = False  # Re-enable auto-reconnect
+            self.status = self.STATE_CONNECTING
+            self.message = f"Connecting to {best_device['name']}..."
+            self.phone_mac = best_device[
+                "mac"
+            ]  # Set phone_mac immediately so screen knows which device we're connecting to
+
+        # Update cached UI status immediately so screen shows connecting state
+        # Use current status - device may be paired/trusted from before
+        self._update_cached_ui_status(mac=best_device["mac"])
 
         # Reset failure counter on manual reconnect
         self._reconnect_failure_count = 0
 
-        threading.Thread(target=self._connect_thread, daemon=True).start()
+        # Unpause monitor since we have a device to monitor
+        self._monitor_paused.clear()
 
-    def _connect_thread(self):
+        # Pass device info to connection thread
+        threading.Thread(
+            target=self._connect_thread, args=(best_device,), daemon=True
+        ).start()
+
+    def _connect_thread(self, target_device):
         """Full automatic connection thread with pairing and connection logic"""
         try:
-            mac = self.phone_mac
-            self._log("INFO", f"Starting connection to {mac}...")
+            mac = target_device["mac"]
+            device_name = target_device["name"]
+            self._log("INFO", f"Starting connection to {device_name} ({mac})...")
 
             # Check if Bluetooth is responsive, restart if needed
             if not self._restart_bluetooth_if_needed():
@@ -2137,110 +3424,114 @@ default-agent
                 with self.lock:
                     self.status = "ERROR"
                     self.message = "Bluetooth service unresponsive. Try: sudo systemctl restart bluetooth"
+                    self._connection_in_progress = False
                 return
 
             # Make Pwnagotchi discoverable and pairable
             self._log("INFO", f"Making Pwnagotchi discoverable...")
             with self.lock:
-                self.message = "Making Pwnagotchi discoverable..."
+                self.message = f"Making Pwnagotchi discoverable for {device_name}..."
+                self._screen_needs_refresh = True
             self._run_cmd(["bluetoothctl", "discoverable", "on"], capture=True)
             self._run_cmd(["bluetoothctl", "pairable", "on"], capture=True)
             time.sleep(self.DEVICE_OPERATION_LONGER_DELAY)
 
-            # Remove device completely to ensure fresh pairing
-            self._log("INFO", "Removing device for fresh pairing...")
+            # First check current pairing status
             with self.lock:
-                self.message = "Removing old pairing..."
-            self._run_cmd(["bluetoothctl", "remove", mac], capture=True)
-            time.sleep(self.DEVICE_OPERATION_DELAY)
-
-            self._log("INFO", "Unblocking device in case it was blocked...")
-            with self.lock:
-                self.message = "Unblocking device..."
-            self._run_cmd(["bluetoothctl", "unblock", mac], capture=True)
-            time.sleep(self.DEVICE_OPERATION_DELAY)
-
-            # Check if already paired
-            with self.lock:
-                self.message = "Checking pairing status..."
+                self.message = f"Checking pairing status with {device_name}..."
+                self._screen_needs_refresh = True
             pair_status = self._check_pair_status(mac)
 
+            # If device is not trusted/paired, we need to pair first
             if not pair_status["paired"]:
-                self._log("INFO", "Device not paired. Starting pairing process...")
+                # Not paired - need to remove and pair fresh
+                self._log("INFO", "Device not paired. Removing for fresh pairing...")
                 with self.lock:
-                    self.status = "PAIRING"
-                    self.message = "Device not paired. Starting pairing process..."
+                    self.message = f"Preparing to pair with {device_name}..."
+                    self._screen_needs_refresh = True
+                self._run_cmd(["bluetoothctl", "remove", mac], capture=True)
+                time.sleep(self.DEVICE_OPERATION_DELAY)
+
+                self._log("INFO", f"Unblocking {device_name} in case it was blocked...")
+                with self.lock:
+                    self.message = f"Unblocking {device_name}..."
+                    self._screen_needs_refresh = True
+                self._run_cmd(["bluetoothctl", "unblock", mac], capture=True)
+                time.sleep(self.DEVICE_OPERATION_DELAY)
+
+                # Start pairing process - set PAIRING state
+                self._log(
+                    "INFO",
+                    f"Device not paired. Starting pairing process with {device_name}...",
+                )
+                with self.lock:
+                    self.status = self.STATE_PAIRING
+                    self.message = f"Pairing with {device_name}..."
+                    self._screen_needs_refresh = True
+
+                # Brief delay to ensure PAIRING state is displayed
+                time.sleep(0.5)
 
                 # Attempt pairing - this will show dialog on phone
                 if not self._pair_device_interactive(mac):
-                    self._log("ERROR", "Pairing failed!")
+                    self._log("ERROR", f"Pairing with {device_name} failed!")
                     with self.lock:
-                        self.status = "ERROR"
-                        self.message = (
-                            "Pairing failed. Did you accept the dialog on your phone?"
-                        )
+                        self.status = self.STATE_ERROR
+                        self.message = f"Pairing with {device_name} failed. Did you accept the dialog?"
+                        self._connection_in_progress = False
+                        self._screen_needs_refresh = True
+                    # Force immediate screen update to show error state
+                    if self._ui_reference:
+                        try:
+                            self.on_ui_update(self._ui_reference)
+                        except Exception as e:
+                            logging.debug(
+                                f"[bt-tether-helper] Error forcing UI update on pairing error: {e}"
+                            )
                     return
 
-                self._log("INFO", "Pairing successful!")
+                self._log("INFO", f"Pairing with {device_name} successful!")
             else:
-                self._log("INFO", "Device already paired")
+                self._log("INFO", f"Device {device_name} already paired")
                 with self.lock:
-                    self.message = "Device already paired ✓"
+                    self.message = f"Device {device_name} already paired ✓"
+                    self._screen_needs_refresh = True
 
-            # Trust the device
-            logging.info(f"[bt-tether-helper] Trusting device...")
+            # Trust the device - set TRUSTING state
+            logging.info(f"[bt-tether-helper] Trusting device {device_name}...")
             with self.lock:
-                self.message = "Setting device as trusted..."
+                self.status = self.STATE_TRUSTING
+                self.message = f"Trusting {device_name}..."
+                self._screen_needs_refresh = True
+
+            # Brief delay to ensure TRUSTING state is displayed
+            time.sleep(0.5)
+
             self._run_cmd(["bluetoothctl", "trust", mac])
 
-            # Wait longer after pairing/trust for phone to be ready
-            logging.info(f"[bt-tether-helper] Waiting for phone to be ready...")
+            # Wait for phone to be ready after pairing/trust
+            logging.info(f"[bt-tether-helper] Waiting for {device_name} to be ready...")
             with self.lock:
-                self.message = "Waiting for phone to be ready..."
-            time.sleep(5)  # Give phone time after pairing
+                self.message = f"Waiting for {device_name} to be ready..."
+                self._screen_needs_refresh = True
+            time.sleep(3)  # Brief wait for phone to be ready
 
-            # Skip bluetoothctl connect - pairing already establishes connection
-            # Go directly to NAP profile connection
+            # Proceed directly to NAP connection (this establishes BT connection if needed)
+            self._log("INFO", "Connecting to NAP profile...")
             with self.lock:
-                self.status = "CONNECTING"
-                self.message = "Waiting for Bluetooth connection..."
-
-            # Wait for Bluetooth connection to be established automatically after pairing
-            self._log("INFO", "Waiting for Bluetooth connection to establish...")
-            connection_established = False
-            for check in range(10):
-                time.sleep(2)
-                status = self._check_pair_status(mac)
-                if status["connected"]:
-                    connection_established = True
-                    self._log("INFO", "✓ Bluetooth connection established!")
-                    break
-                self._log("INFO", f"Waiting for connection... ({(check+1)*2}s)")
-
-            if not connection_established:
-                self._log(
-                    "WARNING",
-                    "Bluetooth connection did not establish automatically after pairing",
-                )
-                self._log(
-                    "INFO", "This might be normal - will try NAP connection anyway"
-                )
-
-            self._log("INFO", "Proceeding to NAP connection...")
-            with self.lock:
+                self.status = self.STATE_CONNECTING
                 self.message = "Connecting to NAP profile for internet..."
+                self._screen_needs_refresh = True
 
-            # Additional wait to ensure phone is ready for NAP connection
-            self._log(
-                "INFO", "Waiting 5 seconds for phone to be ready for tethering..."
-            )
-            time.sleep(5)
+            # Brief delay to ensure CONNECTING state is displayed
+            time.sleep(0.5)
 
             # Try to establish PAN connection
             self._log("INFO", "Establishing PAN connection...")
             with self.lock:
-                self.status = "CONNECTING"
+                self.status = self.STATE_CONNECTING
                 self.message = "Connecting to NAP profile for internet..."
+                self._screen_needs_refresh = True
 
             # Try DBus connection to NAP profile (with retry for br-connection-busy)
             nap_connected = False
@@ -2251,6 +3542,7 @@ default-agent
                     )
                     with self.lock:
                         self.message = f"NAP retry {retry + 1}/3..."
+                        self._screen_needs_refresh = True
                     time.sleep(3)  # Wait for previous connection attempt to settle
 
                 nap_connected = self._connect_nap_dbus(mac)
@@ -2260,6 +3552,7 @@ default-agent
                     self._log("WARNING", f"NAP attempt {retry + 1} failed")
                     with self.lock:
                         self.message = f"NAP attempt {retry + 1}/3 failed..."
+                        self._screen_needs_refresh = True
 
             if nap_connected:
                 self._log("INFO", "NAP connection successful!")
@@ -2276,6 +3569,29 @@ default-agent
                     # Setup network with DHCP
                     if self._setup_network_dhcp(iface):
                         self._log("INFO", "✓ Network setup successful")
+
+                        # Ensure DNS is configured from DHCP
+                        self._log("INFO", "Verifying DNS configuration...")
+                        try:
+                            with open("/etc/resolv.conf", "r") as f:
+                                resolv_content = f.read()
+                                nameservers = [
+                                    line.strip()
+                                    for line in resolv_content.split("\n")
+                                    if line.strip().startswith("nameserver")
+                                ]
+                                if nameservers:
+                                    self._log(
+                                        "INFO",
+                                        f"✓ DNS configured: {', '.join([ns.split()[1] for ns in nameservers])}",
+                                    )
+                                else:
+                                    self._log(
+                                        "WARNING",
+                                        "No nameservers found in /etc/resolv.conf - DNS may not work",
+                                    )
+                        except Exception as e:
+                            self._log("WARNING", f"Could not verify DNS config: {e}")
                     else:
                         self._log(
                             "warning",
@@ -2289,6 +3605,7 @@ default-agent
                     self._log("INFO", "Checking internet connectivity...")
                     with self.lock:
                         self.message = "Verifying internet connection..."
+                        self._screen_needs_refresh = True
 
                     if self._check_internet_connectivity():
                         self._log("INFO", "✓ Internet connectivity verified!")
@@ -2298,6 +3615,22 @@ default-agent
                             current_ip = self._get_current_ip()
                             if current_ip:
                                 self._log("INFO", f"Current IP address: {current_ip}")
+
+                                # Now test DNS resolution after we have confirmed IP
+                                self._log("INFO", "Testing DNS resolution...")
+                                try:
+                                    import socket
+
+                                    socket.gethostbyname("google.com")
+                                    self._log("INFO", "✓ DNS resolution working")
+                                except socket.gaierror:
+                                    self._log(
+                                        "WARNING",
+                                        "DNS resolution failed - check /etc/resolv.conf",
+                                    )
+                                except Exception as dns_e:
+                                    self._log("WARNING", f"DNS test error: {dns_e}")
+
                                 if self.discord_webhook_url:
                                     self._log(
                                         "INFO",
@@ -2323,43 +3656,116 @@ default-agent
                                 "ERROR", f"Failed to send Discord notification: {e}"
                             )
 
+                        # Update cached UI status with fresh data FIRST
+                        self._update_cached_ui_status(mac=mac)
+
+                        # Then set status and clear flags atomically
                         with self.lock:
-                            self.status = "CONNECTED"
+                            self.status = self.STATE_CONNECTED
                             self.message = f"✓ Connected! Internet via {iface}"
-                            self._screen_needs_refresh = True  # Force screen update
+                            self._connection_in_progress = False
+                            self._connection_start_time = None
+                            self._initializing = False
+                            self._screen_needs_refresh = True
+
+                        # Log for debugging
+                        self._log("DEBUG", "Connection complete, flags cleared")
+
+                        # Force immediate screen update to show IP/connected state
+                        if self._ui_reference:
+                            try:
+                                self.on_ui_update(self._ui_reference)
+                            except Exception as e:
+                                logging.debug(
+                                    f"[bt-tether-helper] Error forcing UI update on success: {e}"
+                                )
 
                     else:
                         self._log("WARNING", "No internet connectivity detected")
+                        # Update cached UI status FIRST
+                        self._update_cached_ui_status(mac=mac)
+
                         with self.lock:
-                            self.status = "CONNECTED"
+                            self.status = self.STATE_CONNECTED
                             self.message = (
                                 f"Connected via {iface} but no internet access"
                             )
+                            self._connection_in_progress = False
+                            self._connection_start_time = None
+                            self._initializing = False
+                            self._screen_needs_refresh = True
+
+                        # Force immediate screen update
+                        if self._ui_reference:
+                            try:
+                                self.on_ui_update(self._ui_reference)
+                            except Exception as e:
+                                logging.debug(
+                                    f"[bt-tether-helper] Error forcing UI update on no-internet: {e}"
+                                )
                 else:
                     self._log("WARNING", "NAP connected but no interface detected")
+                    # Update cached UI status first
+                    self._update_cached_ui_status(mac=mac)
+
                     with self.lock:
-                        self.status = "CONNECTED"
+                        self.status = self.STATE_CONNECTED
                         self.message = "Connected but no internet. Enable Bluetooth tethering on phone."
+                        self._connection_in_progress = False
+                        self._connection_start_time = None
+                        self._initializing = False
+                        self._screen_needs_refresh = True
             else:
                 self._log("WARNING", "NAP connection failed")
+
+                # Update cached UI status FIRST
+                self._update_cached_ui_status(mac=mac)
+
+                # Then clear flags so on_ui_update doesn't show connecting
                 with self.lock:
-                    self.status = "CONNECTED"
+                    self.status = self.STATE_CONNECTED
                     self.message = "Bluetooth connected but tethering failed. Enable tethering on phone."
+                    self._connection_in_progress = False  # Clear connection flag
+                    self._connection_start_time = None
+                    self._initializing = False  # Clear initializing flag
+                    self._screen_needs_refresh = True
+                # Force immediate screen update
+                if self._ui_reference:
+                    try:
+                        self.on_ui_update(self._ui_reference)
+                    except Exception as e:
+                        logging.debug(
+                            f"[bt-tether-helper] Error forcing UI update on NAP failure: {e}"
+                        )
 
         except Exception as e:
             self._log("ERROR", f"Connection thread error: {e}")
-
             self._log("ERROR", f"Traceback: {traceback.format_exc()}")
+            # Update cached UI status to show error FIRST
+            self._update_cached_ui_status()
+
             with self.lock:
                 self.status = "ERROR"
                 self.message = f"Connection error: {str(e)}"
                 self._connection_in_progress = False
+                self._connection_start_time = None
+                self._screen_needs_refresh = True
         finally:
             # Clear the flag if not already cleared (error cases)
             # Invalidate cache first to ensure fresh status on next UI update
             with self.lock:
                 if self._connection_in_progress:
                     self._connection_in_progress = False
+                    self._connection_start_time = None
+
+            # Force immediate screen update to show final state (connected or error)
+            if self._ui_reference:
+                try:
+                    self.on_ui_update(self._ui_reference)
+                except Exception as e:
+                    logging.debug(
+                        f"[bt-tether-helper] Error forcing UI update in finally: {e}"
+                    )
 
     def _strip_ansi_codes(self, text):
         """Remove ANSI color/control codes from text"""
@@ -2396,7 +3802,8 @@ default-agent
                 text=True,
             )
             return result.returncode == 0
-        except:
+        except Exception as e:
+            logging.debug(f"[bt-tether-helper] Bluetooth responsive check failed: {e}")
             return False
 
     def _restart_bluetooth_if_needed(self):
@@ -2500,6 +3907,74 @@ default-agent
             self._log("ERROR", f"Network setup error: {e}")
             return False
 
+    def _kill_dhclient_for_interface(self, iface):
+        """Kill dhclient processes specifically managing the given interface.
+        
+        Uses PID-based targeting to avoid killing dhclient processes for other interfaces.
+        Only kills processes where the interface appears as a separate argument.
+        """
+        try:
+            # Get all dhclient PIDs
+            result = subprocess.run(
+                ["pidof", "dhclient"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=3,
+            )
+            
+            if result.returncode != 0 or not result.stdout.strip():
+                # No dhclient processes running
+                return
+            
+            pids = result.stdout.strip().split()
+            killed_any = False
+            
+            for pid in pids:
+                try:
+                    # Get command line for this PID
+                    ps_result = subprocess.run(
+                        ["ps", "-p", pid, "-o", "args="],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=2,
+                    )
+                    
+                    if ps_result.returncode != 0:
+                        continue
+                    
+                    cmdline = ps_result.stdout.strip()
+                    
+                    # Parse dhclient command line more carefully
+                    # dhclient command format: dhclient [options] [interface]
+                    # The interface is typically the last argument
+                    args = cmdline.split()
+                    
+                    # The interface must be the LAST argument and match EXACTLY
+                    # This prevents matching "dhclient eth0" when looking for "eth0-backup"
+                    # or "dhclient bnep0" matching a config file path containing "bnep0"
+                    if args and args[-1] == iface:
+                        self._log("DEBUG", f"Killing dhclient PID {pid} for {iface} (cmdline: {cmdline})")
+                        subprocess.run(
+                            ["sudo", "kill", pid],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=3,
+                        )
+                        killed_any = True
+                    else:
+                        self._log("DEBUG", f"Skipping PID {pid} - not managing {iface} (cmdline: {cmdline})")
+                except Exception as e:
+                    self._log("DEBUG", f"Error checking PID {pid}: {e}")
+                    continue
+            
+            if killed_any:
+                time.sleep(0.5)  # Brief wait for processes to exit
+                
+        except Exception as e:
+            self._log("DEBUG", f"Error in _kill_dhclient_for_interface: {e}")
+
     def _setup_dhclient(self, iface):
         """Request DHCP on interface"""
         try:
@@ -2534,7 +4009,7 @@ default-agent
                     stderr=subprocess.DEVNULL,
                     timeout=5,
                 )
-                time.sleep(1)
+                time.sleep(self.DHCP_RELEASE_WAIT)
                 # Request new lease
                 result = subprocess.run(
                     ["sudo", "dhcpcd", "-4", "-n", iface],
@@ -2552,14 +4027,9 @@ default-agent
 
             elif has_dhclient:
                 self._log("INFO", "Using dhclient...")
-                # Kill any existing dhclient for this interface
-                subprocess.run(
-                    ["sudo", "pkill", "-f", f"dhclient.*{iface}"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=3,
-                )
-                time.sleep(0.5)
+                # Kill any existing dhclient for this interface (PID-based targeting)
+                self._kill_dhclient_for_interface(iface)
+                time.sleep(self.DHCP_KILL_WAIT)
 
                 # Request new lease with better error handling
                 try:
@@ -2589,7 +4059,9 @@ default-agent
                             "WARNING",
                             "📱 Phone is not providing DHCP - enable Bluetooth tethering!",
                         )
-                    elif combined:
+
+                    # Only log dhclient output if there's an error
+                    if result.returncode != 0 and combined:
                         # Truncate long output
                         self._log("INFO", f"dhclient: {combined[:200]}")
 
@@ -2600,13 +4072,54 @@ default-agent
 
                 except subprocess.TimeoutExpired:
                     self._log("WARNING", "dhclient timed out after 30s")
-                    # Kill hung dhclient
-                    subprocess.run(
-                        ["sudo", "pkill", "-9", "-f", f"dhclient.*{iface}"],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=3,
-                    )
+                    # Kill hung dhclient (PID-based targeting)
+                    try:
+                        # Get all dhclient PIDs
+                        result = subprocess.run(
+                            ["pidof", "dhclient"],
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            timeout=3,
+                        )
+                        
+                        if result.returncode == 0 and result.stdout.strip():
+                            pids = result.stdout.strip().split()
+                            
+                            for pid in pids:
+                                try:
+                                    # Get command line for this PID
+                                    ps_result = subprocess.run(
+                                        ["ps", "-p", pid, "-o", "args="],
+                                        stdout=subprocess.PIPE,
+                                        stderr=subprocess.PIPE,
+                                        text=True,
+                                        timeout=2,
+                                    )
+                                    
+                                    if ps_result.returncode != 0:
+                                        continue
+                                    
+                                    cmdline = ps_result.stdout.strip()
+                                    
+                                    # Check if this dhclient is managing our interface
+                                    # The interface MUST be the last argument
+                                    args = cmdline.split()
+                                    if args and args[-1] == iface:
+                                        self._log("DEBUG", f"Force killing dhclient PID {pid} for {iface} (cmdline: {cmdline})")
+                                        subprocess.run(
+                                            ["sudo", "kill", "-9", pid],
+                                            stdout=subprocess.DEVNULL,
+                                            stderr=subprocess.DEVNULL,
+                                            timeout=3,
+                                        )
+                                    else:
+                                        self._log("DEBUG", f"Skipping force-kill PID {pid} - not managing {iface} (cmdline: {cmdline})")
+                                except Exception as e:
+                                    self._log("DEBUG", f"Error force-killing PID {pid}: {e}")
+                                    continue
+                    except Exception as e:
+                        self._log("DEBUG", f"Error in timeout dhclient cleanup: {e}")
 
             else:
                 self._log(
@@ -2661,7 +4174,6 @@ default-agent
 
         except Exception as e:
             logging.error(f"[bt-tether-helper] Network setup error: {e}")
-            return False
             return False
 
     def _is_monitor_mode_active(self):
@@ -2735,210 +4247,6 @@ default-agent
                 f"[bt-tether-helper] Localhost route verification failed: {e}"
             )
 
-    def _protect_existing_routes(self, bt_iface):
-        """Ensure existing interfaces (usb0, eth0) still have valid routes after DHCP on Bluetooth"""
-        try:
-            # Check if usb0 exists and should have a route (common for USB gadget mode)
-            for iface in ["usb0", "eth0"]:
-                try:
-                    # Check if interface exists and has IP
-                    result = subprocess.run(
-                        ["ip", "addr", "show", iface],
-                        capture_output=True,
-                        text=True,
-                        timeout=3,
-                    )
-                    if result.returncode != 0:
-                        continue  # Interface doesn't exist
-
-                    # Check if it has an IP
-                    ip_match = re.search(
-                        r"inet\s+(\d+\.\d+\.\d+)\.(\d+)", result.stdout
-                    )
-                    if not ip_match:
-                        continue  # No IP assigned
-
-                    subnet = ip_match.group(1)
-                    gateway = f"{subnet}.1"
-
-                    # Check if route exists for this interface
-                    route_check = subprocess.run(
-                        ["ip", "route", "show", "dev", iface],
-                        capture_output=True,
-                        text=True,
-                        timeout=3,
-                    )
-
-                    if route_check.returncode == 0 and route_check.stdout.strip():
-                        logging.debug(f"[bt-tether-helper] Route for {iface} OK")
-                    else:
-                        # Route may have been removed by DHCP, restore it
-                        logging.warning(
-                            f"[bt-tether-helper] Restoring route for {iface}..."
-                        )
-                        subprocess.run(
-                            [
-                                "sudo",
-                                "ip",
-                                "route",
-                                "add",
-                                f"{subnet}.0/24",
-                                "dev",
-                                iface,
-                            ],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=3,
-                        )
-                        # Add default route with higher metric so it doesn't override BT
-                        subprocess.run(
-                            [
-                                "sudo",
-                                "ip",
-                                "route",
-                                "add",
-                                "default",
-                                "via",
-                                gateway,
-                                "dev",
-                                iface,
-                                "metric",
-                                "50",
-                            ],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=3,
-                        )
-                        logging.info(f"[bt-tether-helper] ✓ Route for {iface} restored")
-
-                except Exception as e:
-                    logging.debug(f"[bt-tether-helper] Route check for {iface}: {e}")
-
-        except Exception as e:
-            logging.warning(f"[bt-tether-helper] Route protection check failed: {e}")
-
-    def _log_network_config(self, iface):
-        """Log current network configuration for debugging - optimized for RPi Zero W2"""
-        try:
-            # Check IP address
-            ip_result = subprocess.run(
-                ["ip", "addr", "show", iface],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=5,
-            )
-            logging.debug(  # Use debug level to reduce log spam on limited storage
-                f"[bt-tether-helper] Interface {iface} config:\n{ip_result.stdout}"
-            )
-
-            # Check routing table
-            route_result = subprocess.run(
-                ["ip", "route"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=5,
-            )
-            logging.debug(f"[bt-tether-helper] Routing table:\n{route_result.stdout}")
-
-            # Check DNS
-            try:
-                with open("/etc/resolv.conf", "r") as f:
-                    dns_config = f.read()
-                    logging.debug(f"[bt-tether-helper] DNS config:\n{dns_config}")
-            except:
-                pass
-
-        except Exception as e:
-            logging.error(f"[bt-tether-helper] Failed to log network config: {e}")
-
-    def _setup_routing(self, iface):
-        """Setup default route and DNS for internet access"""
-        try:
-            logging.info(f"[bt-tether-helper] Setting up routing for {iface}...")
-
-            # DHCP is handled by _setup_dhclient, just ensure interface is up
-            logging.info(f"[bt-tether-helper] Ensuring {iface} is up for routing...")
-            try:
-                subprocess.run(
-                    ["sudo", "ip", "link", "set", iface, "up"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    timeout=5,
-                )
-            except Exception as e:
-                logging.warning(f"[bt-tether-helper] Failed to bring up {iface}: {e}")
-
-            # Wait for IP to be assigned
-            time.sleep(2)
-
-            # Get the gateway from the interface
-            ip_result = subprocess.run(
-                ["ip", "addr", "show", iface],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=5,
-            )
-
-            # Extract IP and calculate gateway (usually .1 on the subnet)
-
-            ip_match = re.search(r"inet (\d+\.\d+\.\d+)\.(\d+)/", ip_result.stdout)
-            if ip_match:
-                subnet = ip_match.group(1)
-                my_ip_last = ip_match.group(2)
-                gateway = f"{subnet}.1"
-                my_ip = f"{subnet}.{my_ip_last}"
-                logging.info(
-                    f"[bt-tether-helper] ✓ IP assigned: {my_ip}, gateway: {gateway}"
-                )
-
-                # Check if default route exists
-                route_check = subprocess.run(
-                    ["ip", "route", "show", "default"],
-                    stdout=subprocess.PIPE,
-                    text=True,
-                    timeout=5,
-                )
-
-                if iface not in route_check.stdout:
-                    logging.info(
-                        f"[bt-tether-helper] Adding default route via {gateway} on {iface}"
-                    )
-                    subprocess.run(
-                        [
-                            "sudo",
-                            "ip",
-                            "route",
-                            "add",
-                            "default",
-                            "via",
-                            gateway,
-                            "dev",
-                            iface,
-                            "metric",
-                            "100",  # Higher metric to avoid overriding local routes (bettercap API protection)
-                        ],
-                        timeout=5,
-                        check=False,
-                    )
-                else:
-                    logging.info(
-                        f"[bt-tether-helper] Default route via {iface} already exists"
-                    )
-
-            else:
-                logging.warning(
-                    f"[bt-tether-helper] ⚠️  No IPv4 address assigned to {iface}!"
-                )
-                logging.warning(
-                    f"[bt-tether-helper] ⚠️  Make sure Bluetooth tethering is enabled on your phone"
-                )
-
-        except Exception as e:
-            logging.error(f"[bt-tether-helper] Routing setup error: {e}")
-
     def _check_internet_connectivity(self):
         """Check if internet is accessible via Bluetooth interface specifically"""
         try:
@@ -2993,29 +4301,7 @@ default-agent
 
             if result.returncode == 0:
                 logging.info(f"[bt-tether-helper] ✓ Ping to 8.8.8.8 successful")
-
-                # Also verify DNS resolution works
-                logging.info(f"[bt-tether-helper] Testing DNS resolution...")
-                try:
-                    dns_result = subprocess.run(
-                        ["nslookup", "google.com"],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE,
-                        timeout=5,
-                    )
-                    if dns_result.returncode == 0:
-                        logging.info(f"[bt-tether-helper] ✓ DNS resolution working")
-                        return True
-                    else:
-                        logging.warning(
-                            f"[bt-tether-helper] DNS resolution failed but ping works"
-                        )
-                        return True  # Ping works, so basic connectivity is there
-                except:
-                    logging.warning(
-                        f"[bt-tether-helper] DNS test failed but ping works"
-                    )
-                    return True  # Ping works, so basic connectivity is there
+                return True
             else:
                 logging.warning(f"[bt-tether-helper] Ping to 8.8.8.8 failed")
                 logging.warning(f"[bt-tether-helper] Ping stderr: {result.stderr}")
@@ -3394,14 +4680,15 @@ default-agent
 
             # Scan for device first so bluetoothctl knows about it
             logging.info(f"[bt-tether-helper] Scanning for device {mac}...")
+            scan_process = None  # Initialize to prevent undefined reference
             try:
-                subprocess.Popen(
+                scan_process = subprocess.Popen(
                     ["bluetoothctl", "scan", "on"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-            except:
-                pass
+            except Exception as scan_err:
+                logging.debug(f"[bt-tether-helper] Failed to start scan: {scan_err}")
 
             # Wait up to 60 seconds for device to be discovered
             device_found = False
@@ -3417,14 +4704,31 @@ default-agent
 
             # Stop scan
             try:
-                subprocess.Popen(
+                stop_process = subprocess.Popen(
                     ["bluetoothctl", "scan", "off"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-                time.sleep(0.5)
-            except:
-                pass
+                stop_process.wait(timeout=2)  # Wait for scan to stop
+                time.sleep(self.SCAN_STOP_DELAY)
+            except subprocess.TimeoutExpired:
+                logging.debug("[bt-tether-helper] Scan stop timed out")
+                if stop_process:
+                    stop_process.kill()
+            except Exception as scan_err:
+                logging.debug(f"[bt-tether-helper] Failed to stop scan: {scan_err}")
+            finally:
+                # Clean up scan process if it exists
+                if scan_process:
+                    try:
+                        scan_process.poll()
+                        if scan_process.returncode is None:
+                            scan_process.terminate()
+                            scan_process.wait(timeout=1)
+                    except Exception as e:
+                        logging.debug(
+                            f"[bt-tether-helper] Failed to clean up scan process: {e}"
+                        )
 
             if not device_found:
                 logging.error(f"[bt-tether-helper] Device {mac} not found after scan!")
@@ -3559,18 +4863,6 @@ default-agent
         except Exception as e:
             logging.error(f"[bt-tether-helper] Pairing error: {e}")
             return False
-
-    def _start_ble_advertising(self):
-        """Deprecated - device name advertising removed due to Android caching issues"""
-        pass
-
-    def _stop_ble_advertising(self):
-        """Deprecated - device name advertising removed due to Android caching issues"""
-        pass
-
-    def _name_update_loop(self):
-        """Deprecated - device name advertising removed due to Android caching issues"""
-        pass
 
     def _send_discord_notification(self, ip_address):
         """Send IP address notification to Discord webhook if configured"""
@@ -3723,10 +5015,9 @@ default-agent
     def _connect_nap_dbus(self, mac):
         """Connect to NAP service using DBus directly"""
         try:
-            logging.info("[bt-tether-helper] Importing dbus module...")
-            import dbus
-
-            logging.info("[bt-tether-helper] dbus module imported successfully")
+            if not DBUS_AVAILABLE:
+                logging.error("[bt-tether-helper] dbus module not available")
+                return False
 
             logging.info("[bt-tether-helper] Connecting to system bus...")
             bus = dbus.SystemBus()
@@ -3778,8 +5069,11 @@ default-agent
                 )
 
                 # Check for authentication/pairing errors - if phone was unpaired, remove pairing on Pwnagotchi side too
+                # BUT: Don't remove for tethering-disabled errors (br-connection-create-socket, br-connection-profile-unavailable)
                 if (
-                    "br-connection-page-timeout" in error_msg
+                    "Authentication Rejected" in error_msg
+                    or "Connection refused" in error_msg
+                    or "br-connection-page-timeout" in error_msg
                     or "br-connection-unknown" in error_msg
                     or "Host is down" in error_msg
                 ):
@@ -3794,6 +5088,10 @@ default-agent
                             "INFO",
                             "Removed stale pairing - use web UI to re-pair if needed",
                         )
+                        # Also clear the phone_mac to force re-scanning
+                        with self.lock:
+                            self.phone_mac = ""
+                            self.options["mac"] = ""
                     except Exception as e:
                         logging.debug(f"Failed to remove pairing: {e}")
 
