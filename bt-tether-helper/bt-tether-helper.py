@@ -22,12 +22,7 @@ Setup:
 4. Scan and pair your phone - it will auto-connect from then on!
 
 Configuration options:
-<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
-- main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Phone MAC address
-- main.plugins.bt-tether-helper.auto_reconnect = true  # Auto reconnect on disconnect
-=======
 - main.plugins.bt-tether-helper.auto_reconnect = true  # Auto reconnect on disconnect (default: true)
->>>>>>> version/1.2.0-beta:bt-tether-helper.py
 - main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: Show status on display (disables both mini and detailed when false)
 - main.plugins.bt-tether-helper.show_mini_status = true  # Show mini status indicator (single letter: C/N/P/D)
 - main.plugins.bt-tether-helper.mini_status_position = null  # Position for mini status (null = auto top-right)
@@ -118,21 +113,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <h2>🔷 Bluetooth Tether</h2>
     
     <!-- Phone Connection & Status -->
-<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
-    <div class="card" id="phoneConnectionCard" style="display: none;">
-      <h3 style="margin: 0 0 12px 0;">📱 Phone Connection</h3>
-      <div style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
-        <div style="color: #888; margin-bottom: 4px;">Configured MAC address:</div>
-        <div style="color: #4ec9b0; font-size: 14px;">{{ mac if mac else 'Not configured' }}</div>
-        <div style="color: #888; margin-bottom: 4px; margin-top: 8px;">Discord Webhook:</div>
-        <div style="color: {% if discord_webhook_url %}#4ec9b0{% else %}#f48771{% endif %}; font-size: 14px;">{% if discord_webhook_url %}✓ Enabled{% else %}✗ Disabled{% endif %}</div>
-=======
     <div class="card" id="phoneConnectionCard">
       <h3 style="margin: 0 0 12px 0;">📱 Connection Status</h3>
       <div id="trustedDevicesInfo" style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
         <div style="color: #888; margin-bottom: 4px;">Trusted Devices:</div>
         <div id="trustedDevicesSummary" style="color: #4ec9b0; font-size: 14px;">Loading...</div>
->>>>>>> version/1.2.0-beta:bt-tether-helper.py
       </div>
       
       <!-- Status in output style -->
@@ -1076,11 +1061,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
-    __version__ = "1.1.4"
-=======
-    __version__ = "1.2.1-beta"
->>>>>>> version/1.2.0-beta:bt-tether-helper.py
+    __version__ = "1.2.1"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1548,12 +1529,9 @@ class BTTetherHelper(Plugin):
 
     def on_ui_setup(self, ui):
         """Setup UI elements to display Bluetooth status on screen"""
-<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
-=======
         # Store UI reference for triggering updates from background threads
         self._ui_reference = ui
 
->>>>>>> version/1.2.0-beta:bt-tether-helper.py
         # Mini status indicator (single letter: C/N/P/D)
         if self.show_on_screen and self.show_mini_status:
             # If position not specified, place in top-right of screen
@@ -1589,15 +1567,9 @@ class BTTetherHelper(Plugin):
             )
 
     def on_ui_update(self, ui):
-<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
-        """Update Bluetooth status on screen"""
-        # Master switch check - if disabled, don't update anything
-        if not self.show_on_screen or not self.phone_mac:
-=======
         """Update Bluetooth status on screen - MUST be non-blocking"""
         # Master switch check - if disabled, don't update anything
         if not self.show_on_screen:
->>>>>>> version/1.2.0-beta:bt-tether-helper.py
             return
 
         try:
@@ -1696,20 +1668,12 @@ class BTTetherHelper(Plugin):
 
             if untrusting:
                 if self.show_mini_status:
-<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
-                    ui.set("bt-status", "U")  # U = Untrusting
-=======
                     ui.set("bt-status", "T")  # T = Untrusting
->>>>>>> version/1.2.0-beta:bt-tether-helper.py
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Untrusting")
                 return
 
             if connection_in_progress:
-<<<<<<< HEAD:bt-tether-helper/bt-tether-helper.py
-                if self.show_mini_status:
-                    ui.set("bt-status", ">")  # > = Connecting
-=======
                 # Check current status to show appropriate transition state
                 # PAIRING -> TRUSTING -> CONNECTING -> CONNECTED
                 if status_str == self.STATE_CONNECTED:
@@ -1761,7 +1725,6 @@ class BTTetherHelper(Plugin):
                 # No device configured yet, show disconnected
                 if self.show_mini_status:
                     ui.set("bt-status", "X")
->>>>>>> version/1.2.0-beta:bt-tether-helper.py
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:No device")
                 return
@@ -2507,7 +2470,6 @@ default-agent
                         mac=self.phone_mac,
                         status=self.status,
                         message=self.message,
-                        discord_webhook_url=self.discord_webhook_url,
                     )
 
             if clean_path == "trusted-devices":
@@ -3909,7 +3871,7 @@ default-agent
 
     def _kill_dhclient_for_interface(self, iface):
         """Kill dhclient processes specifically managing the given interface.
-        
+
         Uses PID-based targeting to avoid killing dhclient processes for other interfaces.
         Only kills processes where the interface appears as a separate argument.
         """
@@ -3922,14 +3884,14 @@ default-agent
                 text=True,
                 timeout=3,
             )
-            
+
             if result.returncode != 0 or not result.stdout.strip():
                 # No dhclient processes running
                 return
-            
+
             pids = result.stdout.strip().split()
             killed_any = False
-            
+
             for pid in pids:
                 try:
                     # Get command line for this PID
@@ -3940,22 +3902,25 @@ default-agent
                         text=True,
                         timeout=2,
                     )
-                    
+
                     if ps_result.returncode != 0:
                         continue
-                    
+
                     cmdline = ps_result.stdout.strip()
-                    
+
                     # Parse dhclient command line more carefully
                     # dhclient command format: dhclient [options] [interface]
                     # The interface is typically the last argument
                     args = cmdline.split()
-                    
+
                     # The interface must be the LAST argument and match EXACTLY
                     # This prevents matching "dhclient eth0" when looking for "eth0-backup"
                     # or "dhclient bnep0" matching a config file path containing "bnep0"
                     if args and args[-1] == iface:
-                        self._log("DEBUG", f"Killing dhclient PID {pid} for {iface} (cmdline: {cmdline})")
+                        self._log(
+                            "DEBUG",
+                            f"Killing dhclient PID {pid} for {iface} (cmdline: {cmdline})",
+                        )
                         subprocess.run(
                             ["sudo", "kill", pid],
                             stdout=subprocess.DEVNULL,
@@ -3964,14 +3929,17 @@ default-agent
                         )
                         killed_any = True
                     else:
-                        self._log("DEBUG", f"Skipping PID {pid} - not managing {iface} (cmdline: {cmdline})")
+                        self._log(
+                            "DEBUG",
+                            f"Skipping PID {pid} - not managing {iface} (cmdline: {cmdline})",
+                        )
                 except Exception as e:
                     self._log("DEBUG", f"Error checking PID {pid}: {e}")
                     continue
-            
+
             if killed_any:
                 time.sleep(0.5)  # Brief wait for processes to exit
-                
+
         except Exception as e:
             self._log("DEBUG", f"Error in _kill_dhclient_for_interface: {e}")
 
@@ -4082,10 +4050,10 @@ default-agent
                             text=True,
                             timeout=3,
                         )
-                        
+
                         if result.returncode == 0 and result.stdout.strip():
                             pids = result.stdout.strip().split()
-                            
+
                             for pid in pids:
                                 try:
                                     # Get command line for this PID
@@ -4096,17 +4064,20 @@ default-agent
                                         text=True,
                                         timeout=2,
                                     )
-                                    
+
                                     if ps_result.returncode != 0:
                                         continue
-                                    
+
                                     cmdline = ps_result.stdout.strip()
-                                    
+
                                     # Check if this dhclient is managing our interface
                                     # The interface MUST be the last argument
                                     args = cmdline.split()
                                     if args and args[-1] == iface:
-                                        self._log("DEBUG", f"Force killing dhclient PID {pid} for {iface} (cmdline: {cmdline})")
+                                        self._log(
+                                            "DEBUG",
+                                            f"Force killing dhclient PID {pid} for {iface} (cmdline: {cmdline})",
+                                        )
                                         subprocess.run(
                                             ["sudo", "kill", "-9", pid],
                                             stdout=subprocess.DEVNULL,
@@ -4114,9 +4085,14 @@ default-agent
                                             timeout=3,
                                         )
                                     else:
-                                        self._log("DEBUG", f"Skipping force-kill PID {pid} - not managing {iface} (cmdline: {cmdline})")
+                                        self._log(
+                                            "DEBUG",
+                                            f"Skipping force-kill PID {pid} - not managing {iface} (cmdline: {cmdline})",
+                                        )
                                 except Exception as e:
-                                    self._log("DEBUG", f"Error force-killing PID {pid}: {e}")
+                                    self._log(
+                                        "DEBUG", f"Error force-killing PID {pid}: {e}"
+                                    )
                                     continue
                     except Exception as e:
                         self._log("DEBUG", f"Error in timeout dhclient cleanup: {e}")

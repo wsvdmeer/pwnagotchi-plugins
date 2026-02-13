@@ -1,6 +1,4 @@
-# bt-tether-helper
-
-> **🚧 Work in Progress:** This plugin is currently under active development. Features and functionality may change.
+# bt-tether-helper (v1.2.1)
 
 > **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
 >
@@ -13,8 +11,6 @@
 A comprehensive Bluetooth tethering plugin that provides guided setup and automatic connection management for sharing your phone's internet connection with your Pwnagotchi.
 
 ![bt-tether-helper Web Interface](ui.png)
-
-![bt-tether-helper Screen Interface](screen.png)
 
 ## Tested Hardware Configuration
 
@@ -143,58 +139,35 @@ Both displays update in real-time based on connection state.
 ## Configuration Options
 
 ```toml
-# Core Settings
-main.plugins.bt-tether-helper.enabled = true  # Enable the plugin
-<<<<<<< HEAD
-main.plugins.bt-tether-helper.mac = "XX:XX:XX:XX:XX:XX"  # Required: your phone's Bluetooth MAC address
-
-# Display Settings - Master Switch
-main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: enable/disable all screen displays (default: true)
-
-# Display Settings - Mini Status (single-letter indicator)
-main.plugins.bt-tether-helper.show_mini_status = true  # Show mini status indicator (default: true)
-main.plugins.bt-tether-helper.mini_status_position = [200, 0]  # Custom position [x, y] for mini status (optional, default: auto top-right)
-=======
->>>>>>> version/1.2.0-beta
+[main.plugins.bt-tether-helper]
+enabled = true  # Enable the plugin
 
 # Display Settings
-main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: enable/disable all on-screen display (default: true)
-main.plugins.bt-tether-helper.show_mini_status = true  # Show compact mini status indicator (single letter) (default: true)
-main.plugins.bt-tether-helper.mini_status_position = null  # Position [x, y] for mini status (null = auto top-right)
-main.plugins.bt-tether-helper.show_detailed_status = true  # Show detailed status line with IP (default: true)
-main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for detailed status (default: [0, 82])
+show_on_screen = true  # Master switch: enable/disable all on-screen display (default: true)
+show_mini_status = true  # Show compact mini status indicator (single letter) (default: true)
+mini_status_position = null  # Position [x, y] for mini status (null = auto top-right)
+show_detailed_status = true  # Show detailed status line with IP (default: true)
+detailed_status_position = [0, 82]  # Position for detailed status (default: [0, 82])
 
 # Auto-Reconnect Settings
-main.plugins.bt-tether-helper.auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
-main.plugins.bt-tether-helper.reconnect_interval = 60  # Check connection every N seconds (default: 60)
-main.plugins.bt-tether-helper.reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (default: 300 = 5 minutes)
+auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
+reconnect_interval = 60  # Check connection every N seconds (default: 60)
+reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (default: 300 = 5 minutes)
 
 # Discord Notifications (Optional)
-main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"  # Send IP notifications to Discord (optional)
+discord_webhook_url = "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"  # Send IP notifications to Discord (optional)
 ```
 
 ### Display Options
 
 **Master Switch (`show_on_screen`):**
 
-<<<<<<< HEAD
-- Global toggle to enable/disable all screen displays
-- When set to `false`, no status information will be shown on screen
-- Default: `true`
-
-**Mini Status (`show_mini_status`):**
-
-- Shows single-letter status indicator
-- Position can be customized with `mini_status_position` (default: auto top-right corner)
-- Requires `show_on_screen = true`
-=======
 - When `false`, disables ALL on-screen display (both mini and detailed status)
 - When `true`, allows mini and detailed status to be shown based on their individual settings
 
 **Mini Status (`show_mini_status`):**
 
 - Shows single-letter status indicator (typically top-right corner)
->>>>>>> version/1.2.0-beta
 - **I** = Initializing (plugin startup)
 - **C** = Connected with internet (PAN active)
 - **T** = Connected and trusted (no internet yet)
@@ -235,7 +208,7 @@ The plugin includes intelligent automatic reconnection monitoring with failure b
 - **Non-intrusive**: Won't interfere with manual connection/disconnection operations
 - **Respects user actions**: Doesn't auto-reconnect if you manually disconnected the device
 
-To disable auto-reconnect, set `main.plugins.bt-tether-helper.auto_reconnect = false` in your config.
+To disable auto-reconnect, set `auto_reconnect = false` in your `[main.plugins.bt-tether-helper]` config section.
 
 ## Connection & Reconnection Flows
 
@@ -362,9 +335,14 @@ Get notified when your Pwnagotchi connects via Bluetooth tethering:
 2. Click "New Webhook"
 3. Give it a name (e.g., "Pwnagotchi BT")
 4. Select the channel where you want notifications
-5. Copy the webhook URL
-6. Add it to your config: `main.plugins.bt-tether-helper.discord_webhook_url = "YOUR_WEBHOOK_URL"`
-7. Restart Pwnagotchi: `pwnkill`
+5. Add it to your config file:
+
+```toml
+[main.plugins.bt-tether-helper]
+discord_webhook_url = "YOUR_WEBHOOK_URL"
+```
+
+6. Restart Pwnagotchi: `pwnkill`
 
 When your device connects, you'll receive a notification with the IP address and device name!
 
