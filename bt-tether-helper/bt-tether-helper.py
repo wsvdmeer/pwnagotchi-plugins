@@ -1297,7 +1297,8 @@ class BTTetherHelper(Plugin):
     # Pairing constants
     PAIRING_SCAN_WAIT_TIMEOUT = 15
     PAIRING_DIALOG_TIMEOUT = 90
-    NAP_DBUS_CONNECT_TIMEOUT = 15
+    NAP_DBUS_CONNECT_TIMEOUT = 25
+    NAP_DBUS_WARM_RETRY_TIMEOUT = 15  # Shorter timeout for retry after ConnectProfile warms the link
 
     def __init__(self):
         """Initialize plugin instance - called before on_loaded()"""
@@ -2537,8 +2538,9 @@ default-agent
                 if iface:
                     self._log("INFO", f"✓ Network1 returned interface: {iface}")
                 else:
+                    # Use 20s timeout — after warm retry the bridge may take longer
                     self._log("INFO", "Waiting for PAN interface to appear...")
-                    iface = self._wait_for_pan_interface(timeout=10)
+                    iface = self._wait_for_pan_interface(timeout=20)
 
                 if iface:
                     self._log("INFO", f"✓ PAN interface active: {iface}")
@@ -4498,8 +4500,9 @@ default-agent
                     self._log("INFO", f"✓ Network1 returned interface: {iface}")
                 else:
                     # ConnectProfile was used (no Network1), poll for bnep0
+                    # Use 20s timeout — after warm retry the bridge may take longer
                     self._log("INFO", "Waiting for PAN interface to appear...")
-                    iface = self._wait_for_pan_interface(timeout=10)
+                    iface = self._wait_for_pan_interface(timeout=20)
 
                 if iface:
                     self._log("INFO", f"✓ PAN interface active: {iface}")
@@ -7375,10 +7378,13 @@ default-agent
                         # These are definitive failures — don't retry with fallback
                         pass
                     else:
-                        # Transient / unknown — try ConnectProfile fallback
+                        # Transient / unknown — try ConnectProfile to warm the link,
+                        # then retry Network1.Connect which creates the BNEP bridge.
+                        # ConnectProfile alone does NOT create a network interface.
                         logging.info(
-                            "[bt-tether-helper] Falling back to Device1.ConnectProfile..."
+                            "[bt-tether-helper] Falling back to Device1.ConnectProfile to warm BT link..."
                         )
+                        connect_profile_ok = False
                         try:
                             device = dbus.Interface(
                                 bus.get_object("org.bluez", device_path),
@@ -7388,17 +7394,53 @@ default-agent
                                 self.NAP_UUID, timeout=self.NAP_DBUS_CONNECT_TIMEOUT
                             )
                             logging.info(
-                                "[bt-tether-helper] ✓ ConnectProfile fallback succeeded"
+                                "[bt-tether-helper] ✓ ConnectProfile succeeded (BT link active)"
                             )
-                            self._nap_interface = None  # need to poll for interface
-                            return True
+                            connect_profile_ok = True
                         except dbus.exceptions.DBusException as fallback_err:
-                            # Use the original Network1 error for diagnostics
                             error_msg = str(fallback_err)
                             logging.warning(
                                 f"[bt-tether-helper] ConnectProfile fallback also failed: "
                                 f"{error_msg[:120]}"
                             )
+
+                        # ConnectProfile only establishes the Bluetooth transport —
+                        # it does NOT create the BNEP network bridge.  Now that the
+                        # ACL link is warm, retry Network1.Connect which actually
+                        # creates bnep0.
+                        if connect_profile_ok and has_network1:
+                            logging.info(
+                                "[bt-tether-helper] Retrying Network1.Connect now that BT link is warm..."
+                            )
+                            time.sleep(1)  # Brief settle after ConnectProfile
+                            try:
+                                network = dbus.Interface(
+                                    bus.get_object("org.bluez", device_path),
+                                    "org.bluez.Network1",
+                                )
+                                iface_name = network.Connect(
+                                    "nap", timeout=self.NAP_DBUS_WARM_RETRY_TIMEOUT
+                                )
+                                iface_name = str(iface_name)
+                                logging.info(
+                                    f'[bt-tether-helper] ✓ Network1.Connect (warm retry) succeeded — '
+                                    f'interface: {iface_name}'
+                                )
+                                self._nap_interface = iface_name
+                                return True
+                            except dbus.exceptions.DBusException as warm_err:
+                                logging.warning(
+                                    f"[bt-tether-helper] Network1.Connect warm retry failed: "
+                                    f"{str(warm_err)[:120]}"
+                                )
+                                # Still return True so caller can poll for bnep0 —
+                                # the BT link is up, interface may appear with delay
+                                self._nap_interface = None
+                                return True
+                        elif connect_profile_ok:
+                            # Network1 not available, ConnectProfile is all we have
+                            self._nap_interface = None  # need to poll for interface
+                            return True
 
                     # Fall through to error handling with the final error_msg
                     self._format_nap_error(error_msg)
