@@ -964,7 +964,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.2.2"
+    __version__ = "1.2.3"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1968,6 +1968,40 @@ default-agent
                         # Update phone_mac to the device we successfully connected to
                         self.phone_mac = current_mac
                         self.options["mac"] = self.phone_mac
+                        # Mark as connected so we don't trigger the second reconnect block
+                        self._last_known_connected = True
+                        self._reconnect_failure_count = 0
+                        self._first_failure_time = None
+                    else:
+                        # Reconnection failed - update last known state to disconnected
+                        self._last_known_connected = False
+                        self._reconnect_failure_count += 1
+                        if self._first_failure_time is None:
+                            self._first_failure_time = time.time()
+                        if (
+                            self._reconnect_failure_count
+                            >= self._max_reconnect_failures
+                        ):
+                            self._log(
+                                "WARNING",
+                                f"⚠️  Auto-reconnect paused after {self._max_reconnect_failures} failed attempts",
+                            )
+                            self._log(
+                                "INFO",
+                                f"📱 Will retry after {self._reconnect_failure_cooldown}s cooldown, or reconnect manually via web UI",
+                            )
+                            with self.lock:
+                                self.status = self.STATE_DISCONNECTED
+                                self.message = f"Auto-reconnect paused - retrying in {self._reconnect_failure_cooldown}s"
+                                self._connection_in_progress = (
+                                    False  # Clear flag to show proper status
+                                )
+                                self._screen_needs_refresh = True
+
+                    # Skip the rest of this iteration - we already handled reconnection
+                    # Using stale `status` below would cause a double-reconnect attempt
+                    time.sleep(self.reconnect_interval)
+                    continue
 
                 # Force screen refresh if connection state changed
                 if self._last_known_connected != status["connected"]:
@@ -2017,6 +2051,8 @@ default-agent
                         # Update phone_mac to the successful device
                         self.phone_mac = current_mac
                         self.options["mac"] = self.phone_mac
+                        # Update last known state so next iteration doesn't re-trigger
+                        self._last_known_connected = True
                     else:
                         # Increment failure counter
                         self._reconnect_failure_count += 1
@@ -2907,50 +2943,68 @@ default-agent
     def _get_current_status(self, mac):
         """Get current connection status - no cache, direct check"""
         try:
-            # Quick check: look for active bnep interface first (fastest indicator)
+            # Quick check: look for active PAN interface first (fastest indicator)
+            # Check for both bnep and bt-pan interfaces
             try:
-                # Check for bnep interface directly
                 pan_result = subprocess.run(
                     ["ip", "link", "show"], capture_output=True, text=True, timeout=2
                 )
-                if pan_result.returncode == 0 and "bnep" in pan_result.stdout:
-                    # Check if bnep interface has an IP address
-                    try:
-                        ip_result = subprocess.run(
-                            ["ip", "addr", "show", "bnep0"],
-                            capture_output=True,
-                            text=True,
-                            timeout=2,
-                        )
-                        if ip_result.returncode == 0 and "inet " in ip_result.stdout:
-                            # Extract IP address from the output - simplified parsing
-                            ip_address = None
-                            for line in ip_result.stdout.split("\n"):
-                                if "inet " in line and not "127.0.0.1" in line:
-                                    # Find the IP address in format "inet x.x.x.x/xx"
-                                    parts = line.strip().split()
-                                    for part in parts:
-                                        if part.startswith("inet"):
-                                            continue
-                                        if "/" in part and "." in part:
-                                            ip_address = part.split("/")[0]
-                                            break
-                                    if ip_address:
-                                        break
+                if pan_result.returncode == 0:
+                    # Find the PAN interface name (bnep0, bnep1, bt-pan, etc.)
+                    pan_iface = None
+                    for link_line in pan_result.stdout.split("\n"):
+                        for prefix in ("bnep", "bt-pan"):
+                            if prefix in link_line:
+                                # Extract interface name from lines like "5: bnep0: <...>"
+                                match = re.search(r"\d+:\s+(\S+?)[@:]", link_line)
+                                if match:
+                                    pan_iface = match.group(1)
+                                    break
+                        if pan_iface:
+                            break
 
-                            # PAN interface exists and has IP, we're connected with internet
-                            return {
-                                "paired": True,
-                                "trusted": True,
-                                "connected": True,
-                                "pan_active": True,
-                                "interface": "bnep0",
-                                "ip_address": ip_address,
-                            }
-                    except Exception as ip_err:
-                        logging.debug(f"[bt-tether-helper] IP check failed: {ip_err}")
-            except Exception as bnep_err:
-                logging.debug(f"[bt-tether-helper] bnep check failed: {bnep_err}")
+                    if pan_iface:
+                        # Check if PAN interface has an IP address
+                        try:
+                            ip_result = subprocess.run(
+                                ["ip", "addr", "show", pan_iface],
+                                capture_output=True,
+                                text=True,
+                                timeout=2,
+                            )
+                            if (
+                                ip_result.returncode == 0
+                                and "inet " in ip_result.stdout
+                            ):
+                                # Extract IP address from the output
+                                ip_address = None
+                                for line in ip_result.stdout.split("\n"):
+                                    if "inet " in line and not "127.0.0.1" in line:
+                                        parts = line.strip().split()
+                                        for part in parts:
+                                            if part.startswith("inet"):
+                                                continue
+                                            if "/" in part and "." in part:
+                                                ip_address = part.split("/")[0]
+                                                break
+                                        if ip_address:
+                                            break
+
+                                # PAN interface exists and has IP, we're connected with internet
+                                return {
+                                    "paired": True,
+                                    "trusted": True,
+                                    "connected": True,
+                                    "pan_active": True,
+                                    "interface": pan_iface,
+                                    "ip_address": ip_address,
+                                }
+                        except Exception as ip_err:
+                            logging.debug(
+                                f"[bt-tether-helper] IP check failed: {ip_err}"
+                            )
+            except Exception as pan_err:
+                logging.debug(f"[bt-tether-helper] PAN check failed: {pan_err}")
 
             # Quick bluetoothctl check with minimal timeout
             try:
@@ -4852,12 +4906,10 @@ default-agent
 
                 # Check for authentication/pairing errors - if phone was unpaired, remove pairing on Pwnagotchi side too
                 # BUT: Don't remove for tethering-disabled errors (br-connection-create-socket, br-connection-profile-unavailable)
+                # AND: Don't remove for transient errors (page-timeout, host-down) - phone may just be out of range
                 if (
                     "Authentication Rejected" in error_msg
                     or "Connection refused" in error_msg
-                    or "br-connection-page-timeout" in error_msg
-                    or "br-connection-unknown" in error_msg
-                    or "Host is down" in error_msg
                 ):
                     self._log(
                         "WARNING",
@@ -4876,6 +4928,16 @@ default-agent
                             self.options["mac"] = ""
                     except Exception as e:
                         logging.debug(f"Failed to remove pairing: {e}")
+                elif (
+                    "br-connection-page-timeout" in error_msg
+                    or "br-connection-unknown" in error_msg
+                    or "Host is down" in error_msg
+                ):
+                    # Transient errors - phone may be out of range or BT off, don't remove pairing
+                    self._log(
+                        "WARNING",
+                        "⚠️  Phone not reachable (out of range or BT off) - will retry later",
+                    )
 
                 # Check for common errors and provide helpful hints
                 if (

@@ -1,4 +1,4 @@
-# bt-tether-helper (v1.2.2)
+# bt-tether-helper (v1.2.3)
 
 > **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
 >
@@ -81,10 +81,10 @@ Access the web interface at: `http://<pwnagotchi-ip>:8080/plugins/bt-tether-help
 
 When multiple network interfaces are active (e.g., USB and Bluetooth), the web interface displays:
 
-- **Active Route Indicator**: Shows which interface (usb0, bnep0, etc.) is currently handling internet traffic
+- **Active Route Indicator**: Shows which interface (usb0, bnep0, bt-pan, etc.) is currently handling internet traffic
 - **USB Priority Warning**: Alerts when USB connection has priority over Bluetooth (USB typically has lower route metric)
 
-> **Note:** When multiple network interfaces are available (such as USB, Ethernet, or Bluetooth), internet traffic is always routed through the best available connection by default. Typically, the system prioritizes interfaces in this order: Ethernet (`eth0`), USB (`usb0`), then Bluetooth (`bnep0`). Bluetooth tethering remains active as a standby connection and will automatically take over if higher-priority connections (like USB or Ethernet) are disconnected. You can view the currently active interface and routing details in the web interface's status section. This ensures your Pwnagotchi always uses the most reliable and fastest available connection for internet access.
+> **Note:** When multiple network interfaces are available (such as USB, Ethernet, or Bluetooth), internet traffic is always routed through the best available connection by default. Typically, the system prioritizes interfaces in this order: Ethernet (`eth0`), USB (`usb0`), then Bluetooth PAN (`bnep0` or `bt-pan`). Bluetooth tethering remains active as a standby connection and will automatically take over if higher-priority connections (like USB or Ethernet) are disconnected. You can view the currently active interface and routing details in the web interface's status section. This ensures your Pwnagotchi always uses the most reliable and fastest available connection for internet access.
 
 ### Testing Internet Connectivity
 
@@ -93,7 +93,7 @@ Use the **"Test Internet Connectivity"** button in the web interface to verify y
 - **Ping Test**: Verifies IP connectivity to 8.8.8.8
 - **DNS Test**: Tests DNS resolution using Python's socket library (resolves google.com)
 - **DNS Servers**: Shows configured DNS servers from /etc/resolv.conf
-- **Interface IP**: Shows the IP address assigned to bnep0
+- **Interface IP**: Shows the IP address assigned to the Bluetooth PAN interface (bnep0 or bt-pan)
 - **Default Route**: Displays the active routing configuration
 - **Localhost Route**: Verifies localhost (127.0.0.1) routes correctly through loopback interface
 
@@ -222,7 +222,7 @@ To disable auto-reconnect, set `auto_reconnect = false` in your `[main.plugins.b
 6. **Passkey dialog appears** on phone - User must accept within 90 seconds
 7. **Trust device** - After successful pairing, device is marked as trusted for auto-connect
 8. **Connect NAP service** - Establishes Bluetooth network connection (PAN profile)
-9. **Wait for network interface** - bnep0 interface creation (up to 5 seconds)
+9. **Wait for network interface** - PAN interface creation (bnep0 or bt-pan, up to 5 seconds)
 10. **Configure network** - DHCP request to obtain IP address from phone
 11. **Verify internet** - Tests connectivity to ensure tethering is working
 12. **Status: CONNECTED** - Display shows "C" with IP address
@@ -236,7 +236,7 @@ To disable auto-reconnect, set `auto_reconnect = false` in your `[main.plugins.b
 3. **Unblock device** (if needed)
 4. **Ensure trust** - Re-trust device to enable auto-connect
 5. **Connect NAP service** - Establish tethering connection
-6. **Wait for interface** - bnep0 appears
+6. **Wait for interface** - PAN interface appears (bnep0 or bt-pan)
 7. **Configure network** - DHCP configuration
 8. **Verify internet** - Connectivity test
 9. **Status: CONNECTED** - Ready to use
@@ -260,6 +260,11 @@ When connection drops (phone BT disabled, out of range, etc.):
    - After cooldown: Resets counter and tries again
    - Logs warnings to help diagnose issues
 
+**Error handling during reconnection:**
+
+- **Transient errors** (phone out of range, Bluetooth off, page-timeout, host-down): Pairing is preserved and reconnection will be retried automatically when the phone is back in range
+- **Permanent errors** (authentication rejected, connection refused): Pairing is removed since the phone likely needs to be re-paired
+
 **Reconnection intervals:**
 
 - **Normal**: Every 60 seconds (configurable via `reconnect_interval`)
@@ -272,11 +277,11 @@ The plugin uses multiple layers to detect when a device disconnects:
 1. **Fast Path - Network Interface Check:**
 
    ```bash
-   ip link show  # Check for bnep interface
-   ip addr show bnep0  # Check for IP address
+   ip link show  # Check for PAN interface (bnep* or bt-pan*)
+   ip addr show <pan-iface>  # Check for IP address
    ```
 
-   If bnep interface disappears or loses IP → Connection lost
+   If PAN interface disappears or loses IP → Connection lost
 
 2. **Slow Path - Bluetooth Status Check:**
 
@@ -297,8 +302,8 @@ The plugin uses multiple layers to detect when a device disconnects:
 **What triggers reconnection:**
 
 - Phone Bluetooth disabled → `Connected: no`
-- Phone out of range → `Connected: no`
-- Tethering disabled on phone → bnep interface disappears
+- Phone out of range → `Connected: no` (transient — pairing is preserved)
+- Tethering disabled on phone → PAN interface disappears
 - Connection lost for any reason → Status change detection
 
 ### Manual Disconnection
@@ -310,7 +315,7 @@ When you click "Disconnect" in the web interface:
 3. **Block device** - Prevents automatic reconnection (device remains paired, but auto-reconnect is disabled until you manually reconnect)
 4. **Optional: Unpair** - If "Also unpair device" is checked, removes pairing (requires passkey on next connection; device is fully removed from trusted list)
 5. **Status: DISCONNECTED** - Monitor won't attempt auto-reconnect
-6. **Interface cleanup** - bnep interface removed
+6. **Interface cleanup** - PAN interface removed
 
 **Unpair vs Block:**
 

@@ -1,101 +1,131 @@
-# rtc-datetime
+# 🕐 rtc-datetime
 
-A simple plugin that displays the current time and date on the Pwnagotchi screen using the system's RTC (Real-Time Clock).
+A simple plugin that displays the **current time and date** on the Pwnagotchi screen using the system's RTC (Real-Time Clock).
 
-## Features
+## ✨ Features
 
-- **Customizable Format**: Configure time/date format using Python strftime syntax
-- **Configurable Position**: Place the time/date display anywhere on screen
-- **RTC Integration**: Uses Raspberry Pi's hardware RTC or system time
+- **⏰ Customizable Format**: Configure time/date format using Python's strftime syntax
+- **🎯 Configurable Position**: Place the display anywhere on your screen
+- **🔧 RTC Integration**: Uses Raspberry Pi's hardware RTC or system time automatically
 
-## Installation
+## 📦 Installation
 
-1. Copy `rtc-datetime.py` to your Pwnagotchi's custom plugins directory:
+### Step 1: Copy Plugin File
 
-   ```bash
-   sudo cp rtc-datetime.py /usr/local/share/pwnagotchi/custom-plugins/
-   ```
-
-2. Enable the plugin in `/etc/pwnagotchi/config.toml`:
-
-   ```toml
-   main.plugins.rtc-datetime.enabled = true
-   main.plugins.rtc-datetime.position = [0, 92]  # Optional: [x, y] position
-   main.plugins.rtc-datetime.format = "%H:%M %d-%m"  # Optional: time format
-   ```
-
-3. Restart Pwnagotchi:
-   ```bash
-   pwnkill
-   ```
-
-## Configuration Options
-
-```toml
-main.plugins.rtc-datetime.enabled = true
-main.plugins.rtc-datetime.position = [0, 92]  # Display position [x, y] (default: bottom-left)
-main.plugins.rtc-datetime.format = "%H:%M %d-%m"  # Time format (default: 24h + day-month)
+```bash
+sudo cp rtc-datetime.py /usr/local/share/pwnagotchi/custom-plugins/
 ```
 
-## Time Format Examples
+### Step 2: Enable in Config
+
+Edit `/etc/pwnagotchi/config.toml` and add:
+
+```toml
+[main.plugins.rtc-datetime]
+enabled = true
+position = [0, 92]              # Optional: [x, y] position
+format = "%H:%M %d-%m"          # Optional: time format
+```
+
+### Step 3: Restart Pwnagotchi
+
+```bash
+pwnkill
+```
+
+## ⚙️ Configuration Options
+
+```toml
+[main.plugins.rtc-datetime]
+enabled = true                           # Enable/disable plugin
+position = [0, 92]                       # Display position [x, y] (default: bottom-left)
+format = "%H:%M %d-%m"                   # Time format (default: 24h + day-month)
+```
+
+## 📋 Time Format Examples
 
 Common strftime format codes:
 
-- `%H:%M` - 24-hour time (14:30)
-- `%I:%M %p` - 12-hour time with AM/PM (02:30 PM)
-- `%d-%m-%Y` - Date as day-month-year (25-12-2025)
-- `%m/%d/%Y` - Date as month/day/year (12/25/2025)
-- `%A, %B %d` - Full weekday and month (Wednesday, December 25)
-- `%H:%M %d-%m` - Default format (14:30 25-12)
+| Format        | Example                | Description                      |
+| ------------- | ---------------------- | -------------------------------- |
+| `%H:%M`       | 14:30                  | 24-hour time                     |
+| `%I:%M %p`    | 02:30 PM               | 12-hour time with AM/PM          |
+| `%d-%m-%Y`    | 25-12-2025             | Date as day-month-year           |
+| `%m/%d/%Y`    | 12/25/2025             | Date as month/day/year           |
+| `%A, %B %d`   | Wednesday, December 25 | Full weekday and month           |
+| `%H:%M %d-%m` | 14:30 25-12            | Default format (24h + day-month) |
+| `%j`          | 359                    | Day of year                      |
+| `%w`          | 3                      | Day of week (0=Sunday)           |
 
-Full list of format codes: [Python strftime documentation](https://docs.python.org/3/library/datetime.html#strftime-and-strptime-format-codes)
+> 📚 Full reference: [Python strftime documentation](https://docs.python.org/3/library/datetime.html#strftime-and-strptime-format-codes)
 
-## Setting Timezone on Raspberry Pi
+## 🌍 Setting Timezone on Raspberry Pi
 
-The plugin uses the system time, so it's important to configure the correct timezone on your Raspberry Pi.
+The plugin uses the system time, so proper timezone configuration is important.
 
-### Using raspi-config
+### Using raspi-config (Recommended)
 
 ```bash
 sudo raspi-config
 ```
 
-1. Select `5 Localisation Options`
+1. Navigate to `5 Localisation Options`
 2. Select `L2 Timezone`
-3. Select your geographic area
+3. Choose your geographic area
 4. Select your city/timezone
 5. Exit and reboot
 
-## Troubleshooting
+### Manual Check
 
-### Plugin Not Showing
+```bash
+# View current timezone
+timedatectl
 
-- Check plugin is enabled in `/etc/pwnagotchi/config.toml`
-- Verify position is within screen bounds (e-ink display is typically 250x122 pixels)
-- Check logs: `sudo journalctl -u pwnagotchi -f`
+# List available timezones
+timedatectl list-timezones
 
-### Time Format Not Working
+# Set timezone manually
+sudo timedatectl set-timezone <timezone>
+```
 
-- Verify format string syntax: `man strftime`
-- Test format in terminal: `date "+%H:%M %d-%m"`
-- Ensure quotes are properly escaped in TOML config
+## 🔧 Troubleshooting
 
-## License
+### ❌ Plugin Not Showing
 
-GPL3
+- ✅ Check plugin is enabled: `grep rtc-datetime /etc/pwnagotchi/config.toml`
+- ✅ Verify position is within screen bounds (e-ink display is typically 250×122 pixels)
+- ✅ Check logs: `pwnlog` or `tail -f /var/log/pwnagotchi.log`
 
-## Author
+### ❌ Time Format Not Working
+
+- ✅ Verify format string syntax: Local test in terminal
+- ✅ Test format: `python3 -c "import datetime; print(datetime.datetime.now().strftime('%H:%M %d-%m'))"`
+- ✅ Ensure quotes are properly escaped in TOML config
+- ✅ Common issue: Missing `%` before format codes (e.g., `H:%M` instead of `%H:%M`)
+
+### ❌ Time is Wrong
+
+- ✅ Check system timezone: `timedatectl`
+- ✅ Verify NTP is working: `timedatectl status`
+- ✅ Check RTC battery: If using external RTC, verify it has power (coin-cell battery)
+- ✅ Update system time: `sudo ntpdate -s pool.ntp.org` (requires internet)
+
+## 📄 License
+
+**GPL3**
+
+## 👤 Author
 
 **wsvdmeer**
 
-## Version
+## 📌 Version
 
-1.0.0
+**1.0.0**
 
-## Support
+## 🤝 Support
 
 For issues or questions:
 
 1. Check the troubleshooting section above
-2. Review Pwnagotchi logs: `sudo journalctl -u pwnagotchi -f`
+2. Review Pwnagotchi logs: `pwnlog`
 3. Test time format in terminal before applying to config
