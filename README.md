@@ -6,7 +6,7 @@
 
 ## 📦 Available Plugins
 
-### 🔷 bt-tether-helper
+### 🔷 bt-tether
 
 Comprehensive **Bluetooth tethering plugin** with web interface for managing internet connections from your phone.
 
@@ -17,7 +17,9 @@ Comprehensive **Bluetooth tethering plugin** with web interface for managing int
 - 🔄 **Auto-reconnect** with intelligent failure handling
 - 🎮 **Discord notifications** (optional)
 
-**[📖 Full documentation →](bt-tether-helper/README.md)**
+**[📖 Full documentation →](bt-tether/README.md)**
+
+> **Note:** Previously named `bt-tether-helper`. See [migration guide](bt-tether-helper/README.md) for old links.
 
 ---
 
