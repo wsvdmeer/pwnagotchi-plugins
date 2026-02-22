@@ -25,7 +25,7 @@ Configuration options:
 - main.plugins.bt-tether-helper.auto_reconnect = true  # Auto reconnect on disconnect (default: true)
 - main.plugins.bt-tether-helper.show_on_screen = true  # Master switch: Show status on display (disables both mini and detailed when false)
 - main.plugins.bt-tether-helper.show_mini_status = true  # Show mini status indicator (single letter: C/N/P/D)
-- main.plugins.bt-tether-helper.mini_status_position = null  # Position for mini status (null = auto top-right)
+- main.plugins.bt-tether-helper.mini_status_position = [110, 0]  # Position for mini status (default: [110, 0])
 - main.plugins.bt-tether-helper.show_detailed_status = true  # Show detailed status line with IP
 - main.plugins.bt-tether-helper.detailed_status_position = [0, 82]  # Position for detailed status line
 - main.plugins.bt-tether-helper.discord_webhook_url = "https://discord.com/api/webhooks/..."  # Discord webhook for IP notifications (optional)
@@ -964,7 +964,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.2.3"
+    __version__ = "1.2.4"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1043,8 +1043,8 @@ class BTTetherHelper(Plugin):
             "show_mini_status", True
         )  # Show mini status indicator
         self.mini_status_position = self.options.get(
-            "mini_status_position", None
-        )  # Position for mini status (None = auto top-right)
+            "mini_status_position", [110, 0]
+        )  # Position for mini status (default: [110, 0])
 
         # Detailed status line configuration
         self.show_detailed_status = self.options.get(
@@ -1437,15 +1437,12 @@ class BTTetherHelper(Plugin):
 
         # Mini status indicator (single letter: C/N/P/D)
         if self.show_on_screen and self.show_mini_status:
-            # If position not specified, place in top-right of screen
-            if self.mini_status_position:
-                pos = (
-                    tuple(self.mini_status_position)
-                    if isinstance(self.mini_status_position, (list, tuple))
-                    else self.mini_status_position
-                )
-            else:
-                pos = (ui.width() / 2 + 50, 0)
+            # Convert position to tuple if it's a list
+            pos = (
+                tuple(self.mini_status_position)
+                if isinstance(self.mini_status_position, (list, tuple))
+                else self.mini_status_position
+            )
 
             ui.add_element(
                 "bt-status",

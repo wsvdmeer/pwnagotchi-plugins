@@ -145,7 +145,7 @@ enabled = true  # Enable the plugin
 # Display Settings
 show_on_screen = true  # Master switch: enable/disable all on-screen display (default: true)
 show_mini_status = true  # Show compact mini status indicator (single letter) (default: true)
-mini_status_position = null  # Position [x, y] for mini status (null = auto top-right)
+mini_status_position = [110, 0]  # Position [x, y] for mini status (default: [110, 0])
 show_detailed_status = true  # Show detailed status line with IP (default: true)
 detailed_status_position = [0, 82]  # Position for detailed status (default: [0, 82])
 
@@ -178,7 +178,7 @@ discord_webhook_url = "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"  # Sen
 - **U** = Untrusting (removing trust)
 - **?** = Unknown/Error
 
-Position can be customized with `mini_status_position = [x, y]` or set to `null` for automatic top-right placement.
+Position can be customized with `mini_status_position = [x, y]` (default: [110, 0] positions at top-right corner).
 
 **Detailed Status (`show_detailed_status`):**
 
