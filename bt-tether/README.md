@@ -153,9 +153,6 @@ detailed_status_position = [0, 82]  # Position for detailed status (default: [0,
 auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
 reconnect_interval = 60  # Check connection every N seconds (default: 60)
 reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (default: 300 = 5 minutes)
-
-# Discord Notifications (Optional)
-discord_webhook_url = "https://discord.com/api/webhooks/YOUR_WEBHOOK_URL"  # Send IP notifications to Discord (optional)
 ```
 
 ### Display Options
@@ -358,6 +355,114 @@ When your device connects, you'll receive a notification with the IP address and
 - Make sure your Pwnagotchi has internet access via the Bluetooth connection
 - Test the webhook URL directly with a tool like curl to verify it's working
 
+## Creating Custom Plugins
+
+The bt-tether plugin emits events that other plugins can listen to, allowing you to build custom integrations. For example, you could create a plugin that logs connections, sends notifications, updates a remote server, or triggers other actions.
+
+### Available Events
+
+**`bt_tether_connected`**
+
+Fired when Bluetooth tethering connection is successfully established and internet connectivity is verified.
+
+**Event data:**
+
+```python
+{
+    "mac": "AA:BB:CC:DD:EE:FF",           # Device MAC address
+    "device": "My iPhone",                 # Device name
+    "ip": "192.168.1.42",                 # IP address assigned to Pwnagotchi
+    "interface": "bnep0",                  # PAN interface name
+    "pwnagotchi_name": "pwnagotchi"       # Pwnagotchi device name
+}
+```
+
+**`bt_tether_disconnected`**
+
+Fired when Bluetooth tethering connection is dropped or user-requested disconnect occurs.
+
+**Event data:**
+
+```python
+{
+    "mac": "AA:BB:CC:DD:EE:FF",           # Device MAC address
+    "device": "My iPhone",                 # Device name
+    "reason": "user_requested",            # Disconnect reason: user_requested, connection_dropped, or error
+    "pwnagotchi_name": "pwnagotchi"       # Pwnagotchi device name
+}
+```
+
+### Example: Create a Custom Listener Plugin
+
+Create a new plugin file (e.g., `custom-plugins/my-bt-logger.py`) that listens to bt-tether events:
+
+```python
+"""
+My Bluetooth Tether Logger Plugin
+
+Listens to bt-tether events and logs connections to a custom file.
+"""
+
+import logging
+from pwnagotchi.plugins import Plugin
+
+
+class MyBTLogger(Plugin):
+    """Custom plugin that logs Bluetooth tether connections."""
+
+    def on_bt_tether_connected(self, agent, event_data):
+        """Handle bluetooth tether connection event."""
+        ip = event_data.get("ip", "unknown")
+        device = event_data.get("device", "unknown")
+        pwnagotchi_name = event_data.get("pwnagotchi_name", "pwnagotchi")
+
+        logging.info(f"[my-bt-logger] BT Connected: {pwnagotchi_name} → {device} ({ip})")
+
+        # Your custom logic here:
+        # - Update remote server
+        # - Send email notification
+        # - Log to database
+        # - Trigger another action
+        # etc.
+
+    def on_bt_tether_disconnected(self, agent, event_data):
+        """Handle bluetooth tether disconnection event."""
+        device = event_data.get("device", "unknown")
+        reason = event_data.get("reason", "unknown")
+        pwnagotchi_name = event_data.get("pwnagotchi_name", "pwnagotchi")
+
+        logging.info(f"[my-bt-logger] BT Disconnected: {pwnagotchi_name} from {device} (reason: {reason})")
+```
+
+### Enable Your Custom Plugin
+
+Add to your `config.toml`:
+
+```toml
+[main.plugins.my-bt-logger]
+enabled = true
+```
+
+Then restart Pwnagotchi:
+
+```bash
+pwnkill
+```
+
+Your plugin will now receive events whenever bt-tether connects or disconnects!
+
+### Plugin Development Tips
+
+- **Event method naming**: Pwnagotchi automatically dispatches events to methods named `on_<event_name>`
+- **Agent reference**: The `agent` parameter provides access to Pwnagotchi's main agent instance
+- **Non-blocking**: Keep event handlers fast and non-blocking; offload heavy work to background threads
+- **Error handling**: Wrap your logic in try/except to prevent one plugin from affecting others
+- **Logging**: Use Python's `logging` module for consistent output (visible via `pwnlog`)
+
+### Example: Discord Notifications
+
+A full example is included in this repository: **[bt-tether-discord](../bt-tether-discord/)** plugin. It listens to `bt_tether_connected` and sends a formatted embed to a Discord webhook.
+
 ## Troubleshooting
 
 ### Pairing Fails
@@ -447,6 +552,17 @@ The plugin provides REST API endpoints for external control. The web interface i
 - `GET /plugins/bt-tether/connection-status` - Full connection details
 - `GET /plugins/bt-tether/scan` - Scan for devices (30 seconds)
 - `GET /plugins/bt-tether/test-internet` - Test internet connectivity with detailed diagnostics
+
+## Related Plugins
+
+These companion plugins extend `bt-tether` with notification support by listening to its events:
+
+| Plugin                                       | Description                                                     |
+| -------------------------------------------- | --------------------------------------------------------------- |
+| [bt-tether-discord](../bt-tether-discord/)   | Sends a Discord embed when BT tethering connects or disconnects |
+| [bt-tether-telegram](../bt-tether-telegram/) | Sends a Telegram message when BT tethering connects             |
+
+Both plugins use the `bt_tether_connected` and `bt_tether_disconnected` events emitted by this plugin. See each plugin's README for installation and configuration details.
 
 ## License
 
