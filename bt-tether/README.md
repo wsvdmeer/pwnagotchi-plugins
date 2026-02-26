@@ -1,4 +1,4 @@
-# bt-tether (v1.2.3)
+# bt-tether (v1.2.5)
 
 > **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
 >
@@ -6,7 +6,7 @@
 
 > **✅ Important:** This plugin has been tested on **Android 15 & 16** with [Pwnagotchi v2.9.5.3](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.3) and [v2.9.5.4](https://github.com/jayofelony/pwnagotchi/releases/tag/v2.9.5.4). **Bluetooth tethering must be enabled on your device** for this plugin to work. Compatibility with other versions has not been tested.
 >
-> **🆕 No manual MAC configuration required!** The web UI can scan, pair, and manage devices automatically. MAC randomization is handled for both iOS and Android. Manual MAC entry is not needed for normal use.
+> **🆕 No manual MAC configuration required!** The web UI can scan, pair, and manage devices automatically. MAC randomization is handled for both iOS and Android. Manual MAC entry is not needed.
 
 A comprehensive Bluetooth tethering plugin that provides guided setup and automatic connection management for sharing your phone's internet connection with your Pwnagotchi.
 
@@ -26,80 +26,28 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 
 - **Web Interface**: User-friendly web UI for scanning, pairing, and managing Bluetooth connections
 - **Automatic Pairing & Discovery**: Scan and pair with your phone directly from the web UI—no need to manually enter MAC addresses (works with iOS randomized MACs)
-- **Auto-Discovery of Trusted Devices**: Finds and manages trusted devices with tethering capability
-- **Connection Management**: Connect and disconnect devices with one click
-- **Auto-Reconnect**: Automatically detects and reconnects dropped connections
-- **Status Display**: Real-time connection status on Pwnagotchi screen
-- **PAN (Personal Area Network) Support**: Automatic network interface configuration
-- **Discord Notifications**: Optional webhook notifications when connected with IP address
+- **Auto-Connect on Startup**: Automatically finds and connects to trusted devices when Pwnagotchi boots
+- **Auto-Reconnect**: Monitors the connection and automatically reconnects when it drops
+- **Status Display**: Real-time connection status on Pwnagotchi's e-ink screen (mini + detailed)
+- **PAN (Personal Area Network) Support**: Automatic network interface and DHCP configuration
+- **Plugin Event System**: Emits `bt_tether_connected` and `bt_tether_disconnected` events that other plugins can listen to for custom integrations (see [Related Plugins](#related-plugins))
 
 ## Installation
 
-1. **Dependencies:**
-   - If you are running stock Pwnagotchi, all required dependencies are already installed.
-   - If you are building your own image or using a minimal OS, install these packages:
-
-     ```bash
-     sudo apt-get update
-     sudo apt-get install -y bluez network-manager python3-dbus python3-toml
-     ```
-
-2. **Enable required services:**
-
-   ```bash
-   sudo systemctl enable bluetooth && sudo systemctl start bluetooth
-   sudo systemctl enable NetworkManager && sudo systemctl start NetworkManager
-   ```
-
-3. **Copy `bt-tether.py` to your Pwnagotchi's custom plugins directory:**
+1. **Copy `bt-tether.py` to your Pwnagotchi's custom plugins directory:**
 
    ```bash
    sudo cp bt-tether.py /usr/local/share/pwnagotchi/custom-plugins/
    ```
 
-4. **Restart Pwnagotchi:**
+2. **Restart Pwnagotchi:**
    ```bash
    pwnkill
    ```
 
-## Usage
+All required dependencies (bluez, NetworkManager, python3-dbus, python3-toml) are already included with Pwnagotchi.
 
-### Web Interface
-
-Access the web interface at: `http://<pwnagotchi-ip>:8080/plugins/bt-tether`
-
-**Features:**
-
-- **Scan & Pair**: Discover and pair with nearby Bluetooth devices (no manual MAC entry needed)
-- **Connect to Phone**: Initiate connection to your paired device
-- **Disconnect**: Safely disconnect from paired device (optionally unpair)
-- **Status**: Real-time connection and internet status
-- **Internet Test**: Test connectivity with detailed diagnostics (ping, DNS, IP, routing)
-- **Active Route Display**: Shows which network interface is handling internet traffic
-
-### Network Priority
-
-When multiple network interfaces are active (e.g., USB and Bluetooth), the web interface displays:
-
-- **Active Route Indicator**: Shows which interface (usb0, bnep0, bt-pan, etc.) is currently handling internet traffic
-- **USB Priority Warning**: Alerts when USB connection has priority over Bluetooth (USB typically has lower route metric)
-
-> **Note:** When multiple network interfaces are available (such as USB, Ethernet, or Bluetooth), internet traffic is always routed through the best available connection by default. Typically, the system prioritizes interfaces in this order: Ethernet (`eth0`), USB (`usb0`), then Bluetooth PAN (`bnep0` or `bt-pan`). Bluetooth tethering remains active as a standby connection and will automatically take over if higher-priority connections (like USB or Ethernet) are disconnected. You can view the currently active interface and routing details in the web interface's status section. This ensures your Pwnagotchi always uses the most reliable and fastest available connection for internet access.
-
-### Testing Internet Connectivity
-
-Use the **"Test Internet Connectivity"** button in the web interface to verify your connection:
-
-- **Ping Test**: Verifies IP connectivity to 8.8.8.8
-- **DNS Test**: Tests DNS resolution using Python's socket library (resolves google.com)
-- **DNS Servers**: Shows configured DNS servers from /etc/resolv.conf
-- **Interface IP**: Shows the IP address assigned to the Bluetooth PAN interface (bnep0 or bt-pan)
-- **Default Route**: Displays the active routing configuration
-- **Localhost Route**: Verifies localhost (127.0.0.1) routes correctly through loopback interface
-
-This is especially useful for troubleshooting when you have multiple network interfaces active.
-
-### Connection Process
+## Connection Process
 
 1. **Enable Bluetooth Tethering on Your Phone:**
 
@@ -107,34 +55,17 @@ This is especially useful for troubleshooting when you have multiple network int
 
    > **Note:** Bluetooth tethering **must be enabled** before attempting to connect.
 
-2. **Pairing (First Time Only):**
-   - Use the web interface to scan for your phone and initiate pairing (no need to manually enter MAC address)
-   - A pairing dialog will appear on your phone
-   - Verify the passkey matches on both devices
-   - Tap "Pair" on your phone
-   - Wait for connection to complete (up to 90 seconds)
+2. **Pair Your Phone (First Time Only):**
+   - Open the web interface at `http://<pwnagotchi-ip>:8080/plugins/bt-tether`
+   - Click **Scan** to discover nearby Bluetooth devices
+   - Click **Pair** next to your phone in the discovered devices list
+   - A pairing dialog will appear on your phone — verify the passkey matches and tap "Pair"
+   - The plugin will automatically connect and establish internet after pairing (up to 90 seconds)
 
-3. **Subsequent Connections:**
-   - Once paired, simply click "Connect to Phone" in the web interface
-   - Device will automatically connect and establish internet connection
-
-### On-Screen Status Indicators
-
-The plugin provides two display modes that can be used independently or together:
-
-**1. Compact Status (top-right corner):**
-
-- Single-letter indicator (configurable via `position`)
-- Minimal screen space usage
-- Quick status at a glance
-
-**2. Detailed Status (default: position [0, 82]):**
-
-- Full status text with IP address when connected
-- Shows pairing/trust state
-- Configurable via `detailed_status_position`
-
-Both displays update in real-time based on connection state.
+3. **After Pairing:**
+   - The plugin **auto-connects** to your paired device on every Pwnagotchi boot
+   - If the connection drops (phone out of range, Bluetooth off, etc.), it **auto-reconnects** when the phone is available again
+   - No manual intervention needed for subsequent connections
 
 ## Configuration Options
 
@@ -155,217 +86,155 @@ reconnect_interval = 60  # Check connection every N seconds (default: 60)
 reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (default: 300 = 5 minutes)
 ```
 
-### Display Options
+## Usage
 
-**Master Switch (`show_on_screen`):**
+### Web Interface
 
-- When `false`, disables ALL on-screen display (both mini and detailed status)
-- When `true`, allows mini and detailed status to be shown based on their individual settings
+Access the web interface at: `http://<pwnagotchi-ip>:8080/plugins/bt-tether`
+
+The interface consists of the following sections:
+
+**Connection Status** — Main panel showing:
+- **Trusted Devices**: Lists paired devices with tethering capability
+- **Status Indicators**: Real-time Paired / Trusted / Connected / Internet status with checkmarks
+- **Active Connection**: Shows which network interface is handling internet traffic (Bluetooth, USB, Ethernet, Wi-Fi) with standby notifications when a higher-priority interface is active
+- **IP Address**: Displayed when connected with an active PAN interface
+- **Output Log**: Live scrolling log of plugin activity (pairing, connecting, errors)
+
+**Connect / Disconnect** — Action buttons:
+- **Connect to Phone**: Initiates connection to a trusted device (hidden when already connected)
+- **Disconnect**: Disconnects, blocks, and unpairs the device. Requires re-pairing to connect again
+
+**Discover Devices** — Only shown when no trusted devices exist:
+- **Scan**: Discovers nearby Bluetooth devices (30 second scan with live results)
+- **Pair**: One-click pairing from the discovered devices list
+
+**Test Internet Connectivity** — Only shown when connected:
+- Runs ping, DNS, IP, default route, and localhost route diagnostics
+
+### Network Priority
+
+When multiple network interfaces are active, the web interface shows which interface is handling internet traffic. The system prioritizes interfaces in this order: Ethernet (`eth0`) → USB (`usb0`) → Bluetooth PAN (`bnep0`). Bluetooth tethering remains on standby and automatically takes over when higher-priority connections disconnect.
+
+### On-Screen Status Indicators
+
+The plugin provides two display modes that can be used independently or together:
 
 **Mini Status (`show_mini_status`):**
 
-- Shows single-letter status indicator (typically top-right corner)
-- **I** = Initializing (plugin startup)
-- **C** = Connected with internet (PAN active)
-- **T** = Connected and trusted (no internet yet)
-- **N** = Connected but not trusted
-- **P** = Paired but not connected
-- **>** = Connecting/Pairing/Reconnecting in progress
-- **X** = Disconnecting or Disconnected
-- **U** = Untrusting (removing trust)
-- **?** = Unknown/Error
+Single-letter indicator showing current state:
 
-Position can be customized with `mini_status_position = [x, y]` (default: [110, 0] positions at top-right corner).
+| Letter | State | Description |
+|--------|-------|-------------|
+| **I** | Initializing | Plugin startup, Bluetooth service restarting |
+| **S** | Scanning | Device discovery in progress |
+| **P** | Pairing | Pairing with phone in progress |
+| **T** | Trusting / Untrusting | Trusting device or removing trust |
+| **>** | Connecting | Connection in progress |
+| **R** | Reconnecting | Auto-reconnection attempt |
+| **C** | Connected | Connected with internet (PAN active) |
+| **N** | No internet | Connected but PAN not active |
+| **D** | Disconnecting | Disconnect in progress |
+| **X** | Disconnected | No device or not connected |
+| **?** | Error | Unknown state or error |
+
+Position can be customized with `mini_status_position = [x, y]` (default: `[110, 0]`).
 
 **Detailed Status (`show_detailed_status`):**
 
-- Shows full status at configurable position (default: [0, 82])
-- **BT:Initializing...** = Plugin initializing
-- **BT:10.199.236.17** = Connected with IP address
-- **BT:Trusted** = Connected and trusted but no IP yet
-- **BT:Connected** = Connected but not trusted
-- **BT:Paired** = Paired but not connected
-- **BT:Connecting...** = Connection in progress
-- **BT:Reconnecting...** = Auto-reconnection in progress
-- **BT:Disconnecting...** = Disconnection in progress
-- **BT:Untrusting...** = Removing trust from device
-- **BT:Disconnected** = Not connected
-- **BT:Error** = Error/unknown state
+Full status line at a configurable position:
 
-Customize position with `detailed_status_position = [x, y]`.
+| Display | Meaning |
+|---------|---------|
+| **BT:Initializing** | Plugin initializing |
+| **BT:Scanning** | Scanning for devices |
+| **BT:Pairing** | Pairing in progress |
+| **BT:Trusting** | Trusting device |
+| **BT:Connecting...** | Connection in progress |
+| **BT:Reconnecting...** | Auto-reconnection attempt |
+| **BT:192.168.44.2** | Connected with IP address |
+| **BT:Connected** | Connected (PAN active, no IP yet) |
+| **BT:Trusted** | Connected and trusted (no PAN) |
+| **BT:Paired** | Paired but not connected |
+| **BT:Disconnecting...** | Disconnect in progress |
+| **BT:Untrusting...** | Removing trust from device |
+| **BT:Disconnected** | Not connected |
+| **BT:No device** | No paired device found |
+| **BT:Error** | Error or unknown state |
+
+Position can be customized with `detailed_status_position = [x, y]` (default: `[0, 82]`).
 
 ### Auto-Reconnect
 
-The plugin includes intelligent automatic reconnection monitoring with failure backoff:
+The plugin includes automatic reconnection monitoring with failure backoff:
 
 - **Enabled by default**: Monitors your Bluetooth connection and automatically reconnects if it drops
-- **Configurable interval**: Checks connection status every 60 seconds by default (via `reconnect_interval`)
+- **Configurable interval**: Checks connection status every 60 seconds (via `reconnect_interval`)
 - **Smart reconnection**: Only attempts reconnection when device is paired/trusted but disconnected
-- **Failure handling**: After 5 consecutive failed reconnection attempts, enters a 5-minute cooldown period
-- **Non-intrusive**: Won't interfere with manual connection/disconnection operations
+- **Failure handling**: After 5 consecutive failures, enters a cooldown period (default: 5 minutes via `reconnect_failure_cooldown`)
 - **Respects user actions**: Doesn't auto-reconnect if you manually disconnected the device
+- **Error classification**: Transient errors (phone out of range) preserve pairing; permanent errors (authentication rejected) remove pairing
 
-To disable auto-reconnect, set `auto_reconnect = false` in your `[main.plugins.bt-tether]` config section.
+To disable auto-reconnect, set `auto_reconnect = false` in your config.
 
 ## Connection & Reconnection Flows
 
 ### Initial Connection Flow (First Time Pairing)
 
-1. **User initiates connection** via web interface or plugin startup
-2. **Pwnagotchi becomes discoverable** - Bluetooth adapter set to pairable/discoverable mode
-3. **Remove old pairing** (if exists) - Ensures clean pairing state
-4. **Unblock device** - Removes any previous blocks
-5. **Pairing request sent** - Pwnagotchi requests pairing with phone
-6. **Passkey dialog appears** on phone - User must accept within 90 seconds
-7. **Trust device** - After successful pairing, device is marked as trusted for auto-connect
-8. **Connect NAP service** - Establishes Bluetooth network connection (PAN profile)
-9. **Wait for network interface** - PAN interface creation (bnep0 or bt-pan, up to 5 seconds)
-10. **Configure network** - DHCP request to obtain IP address from phone
-11. **Verify internet** - Tests connectivity to ensure tethering is working
-12. **Status: CONNECTED** - Display shows "C" with IP address
+1. **User initiates pairing** via web interface scan + pair
+2. **Pwnagotchi becomes discoverable** — Bluetooth adapter set to pairable/discoverable mode
+3. **Remove old pairing** (if exists) — Ensures clean pairing state
+4. **Pairing request sent** — Pwnagotchi requests pairing with phone
+5. **Passkey dialog appears** on phone — User must accept within 90 seconds
+6. **Trust device** — Device is marked as trusted for auto-connect
+7. **Connect NAP service** — Establishes Bluetooth network connection (PAN profile)
+8. **Configure network** — DHCP request to obtain IP address from phone
+9. **Verify internet** — Tests connectivity to ensure tethering is working
+10. **Status: CONNECTED** — Display shows "C" with IP address
 
-**Typical duration:** 20-45 seconds for first-time pairing
+**Typical duration:** 20-45 seconds
 
-### Subsequent Connection Flow (Already Paired)
+### Auto-Connect on Startup
 
-1. **User initiates connection** or auto-reconnect triggered
-2. **Verify device status** - Check if paired and trusted
-3. **Unblock device** (if needed)
-4. **Ensure trust** - Re-trust device to enable auto-connect
-5. **Connect NAP service** - Establish tethering connection
-6. **Wait for interface** - PAN interface appears (bnep0 or bt-pan)
-7. **Configure network** - DHCP configuration
-8. **Verify internet** - Connectivity test
-9. **Status: CONNECTED** - Ready to use
+When Pwnagotchi boots with `auto_reconnect = true`:
 
-**Typical duration:** 10-20 seconds (no pairing dialog needed)
+1. Plugin initializes Bluetooth services and starts the pairing agent
+2. Scans for trusted devices with NAP (tethering) capability
+3. Automatically connects to the best available trusted device
+4. Configures network via DHCP and verifies internet connectivity
 
-### Automatic Reconnection Flow
+### Automatic Reconnection
 
-When connection drops (phone BT disabled, out of range, etc.):
+When a connection drops (phone BT disabled, out of range, etc.):
 
-1. **Monitor detects disconnection** - Checks every 60 seconds via `bluetoothctl info` and network interface status
-2. **Triggers reconnection** - Sets status to "RECONNECTING"
-3. **Attempt reconnect** - Follows subsequent connection flow
-4. **Success handling:**
-   - Resets failure counter
-   - Updates status to CONNECTED
-   - Continues monitoring
-5. **Failure handling:**
-   - Increments failure counter (max 5 attempts)
-   - After 5 failures: Enters cooldown mode for 5 minutes
-   - After cooldown: Resets counter and tries again
-   - Logs warnings to help diagnose issues
+1. **Monitor detects disconnection** via network interface and Bluetooth status checks
+2. **Emits `bt_tether_disconnected` event** with reason `connection_dropped`
+3. **Attempts reconnection** using NAP connection via D-Bus
+4. **On success**: Resets failure counter, emits `bt_tether_connected` event
+5. **On failure**: Increments failure counter (max 5 attempts), then enters cooldown
 
-**Error handling during reconnection:**
-
-- **Transient errors** (phone out of range, Bluetooth off, page-timeout, host-down): Pairing is preserved and reconnection will be retried automatically when the phone is back in range
-- **Permanent errors** (authentication rejected, connection refused): Pairing is removed since the phone likely needs to be re-paired
-
-**Reconnection intervals:**
-
-- **Normal**: Every 60 seconds (configurable via `reconnect_interval`)
-- **After 5 failures**: 5-minute cooldown (configurable via `reconnect_failure_cooldown`)
-
-### Disconnection Detection Methods
-
-The plugin uses multiple layers to detect when a device disconnects:
-
-1. **Fast Path - Network Interface Check:**
-
-   ```bash
-   ip link show  # Check for PAN interface (bnep* or bt-pan*)
-   ip addr show <pan-iface>  # Check for IP address
-   ```
-
-   If PAN interface disappears or loses IP → Connection lost
-
-2. **Slow Path - Bluetooth Status Check:**
-
-   ```bash
-   bluetoothctl info XX:XX:XX:XX:XX:XX
-   ```
-
-   Parses output for:
-   - `Connected: yes/no` - Bluetooth connection status
-   - `Paired: yes/no` - Pairing status
-   - `Trusted: yes/no` - Trust/auto-connect status
-
-3. **State Comparison:**
-   - Compares current `connected` status with previous check
-   - If was connected (`True`) and now isn't (`False`) → Disconnection detected
-   - Triggers auto-reconnect flow (unless user manually disconnected)
-
-**What triggers reconnection:**
-
-- Phone Bluetooth disabled → `Connected: no`
-- Phone out of range → `Connected: no` (transient — pairing is preserved)
-- Tethering disabled on phone → PAN interface disappears
-- Connection lost for any reason → Status change detection
+**Error classification:**
+- **Transient errors** (page-timeout, host-down): Pairing is preserved, retry later
+- **Permanent errors** (authentication rejected, connection refused): Pairing removed, re-pairing needed
 
 ### Manual Disconnection
 
-When you click "Disconnect" in the web interface:
+When you click "Disconnect" in the web interface, the plugin:
 
-1. **Disconnect initiated** - Sets `_user_requested_disconnect = True`
-2. **NAP disconnect** - Closes Bluetooth network connection
-3. **Block device** - Prevents automatic reconnection (device remains paired, but auto-reconnect is disabled until you manually reconnect)
-4. **Optional: Unpair** - If "Also unpair device" is checked, removes pairing (requires passkey on next connection; device is fully removed from trusted list)
-5. **Status: DISCONNECTED** - Monitor won't attempt auto-reconnect
-6. **Interface cleanup** - PAN interface removed
+1. Disconnects the NAP profile and Bluetooth connection
+2. Blocks the device to prevent auto-reconnection
+3. Removes (unpairs) the device completely
+4. Emits `bt_tether_disconnected` event with reason `user_request`
 
-**Unpair vs Block:**
-
-- **Block**: Prevents auto-reconnect, but device remains paired and can be manually reconnected later.
-- **Unpair**: Removes the device pairing entirely; next connection will require a new pairing process.
-
-To reconnect after manual disconnect, use the web interface "Connect" button.
-
-### Discord Notifications
-
-Get notified when your Pwnagotchi connects via Bluetooth tethering:
-
-- **Optional Feature**: Only activates when `discord_webhook_url` is configured
-- **IP Address Notifications**: Automatically sends your device's IP address to a private Discord channel
-- **Works with Auto-Reconnect**: Notifications sent both on manual connections and automatic reconnections
-- **Easy Setup**: Just create a Discord webhook and add the URL to your config
-- **Non-Blocking**: Runs in background thread, won't delay connection even if webhook fails
-
-**How to set up Discord webhook:**
-
-1. In your Discord server, go to Server Settings → Integrations → Webhooks
-2. Click "New Webhook"
-3. Give it a name (e.g., "Pwnagotchi BT")
-4. Select the channel where you want notifications
-5. Add it to your config file:
-
-```toml
-[main.plugins.bt-tether]
-discord_webhook_url = "YOUR_WEBHOOK_URL"
-```
-
-6. Restart Pwnagotchi: `pwnkill`
-
-When your device connects, you'll receive a notification with the IP address and device name!
-
-**Troubleshooting Discord Notifications:**
-
-- Check logs with `pwnlog` to see if the webhook is being called
-- Verify the webhook URL is correct in your config
-- Make sure your Pwnagotchi has internet access via the Bluetooth connection
-- Test the webhook URL directly with a tool like curl to verify it's working
+To connect again after a manual disconnect, scan and pair the device again through the web interface.
 
 ## Creating Custom Plugins
 
-The bt-tether plugin emits events that other plugins can listen to, allowing you to build custom integrations. For example, you could create a plugin that logs connections, sends notifications, updates a remote server, or triggers other actions.
+The bt-tether plugin emits events that other plugins can listen to, allowing you to build custom integrations (notifications, logging, remote updates, etc.).
 
 ### Available Events
 
-**`bt_tether_connected`**
-
-Fired when Bluetooth tethering connection is successfully established and internet connectivity is verified.
-
-**Event data:**
+**`bt_tether_connected`** — Fired when connection is established and internet connectivity is verified.
 
 ```python
 {
@@ -373,36 +242,26 @@ Fired when Bluetooth tethering connection is successfully established and intern
     "device": "My iPhone",                 # Device name
     "ip": "192.168.1.42",                 # IP address assigned to Pwnagotchi
     "interface": "bnep0",                  # PAN interface name
-    "pwnagotchi_name": "pwnagotchi"       # Pwnagotchi device name
+    "pwnagotchi_name": "pwnagotchi"       # Pwnagotchi device name (auto-populated)
 }
 ```
 
-**`bt_tether_disconnected`**
-
-Fired when Bluetooth tethering connection is dropped or user-requested disconnect occurs.
-
-**Event data:**
+**`bt_tether_disconnected`** — Fired when connection drops or user disconnects.
 
 ```python
 {
     "mac": "AA:BB:CC:DD:EE:FF",           # Device MAC address
     "device": "My iPhone",                 # Device name
-    "reason": "user_requested",            # Disconnect reason: user_requested, connection_dropped, or error
-    "pwnagotchi_name": "pwnagotchi"       # Pwnagotchi device name
+    "reason": "user_request",              # Reason: user_request, connection_dropped, or error
+    "pwnagotchi_name": "pwnagotchi"       # Pwnagotchi device name (auto-populated)
 }
 ```
 
-### Example: Create a Custom Listener Plugin
+### Example: Custom Listener Plugin
 
-Create a new plugin file (e.g., `custom-plugins/my-bt-logger.py`) that listens to bt-tether events:
+Create a plugin file (e.g., `custom-plugins/my-bt-logger.py`):
 
 ```python
-"""
-My Bluetooth Tether Logger Plugin
-
-Listens to bt-tether events and logs connections to a custom file.
-"""
-
 import logging
 from pwnagotchi.plugins import Plugin
 
@@ -414,54 +273,40 @@ class MyBTLogger(Plugin):
         """Handle bluetooth tether connection event."""
         ip = event_data.get("ip", "unknown")
         device = event_data.get("device", "unknown")
-        pwnagotchi_name = event_data.get("pwnagotchi_name", "pwnagotchi")
-
-        logging.info(f"[my-bt-logger] BT Connected: {pwnagotchi_name} → {device} ({ip})")
-
-        # Your custom logic here:
-        # - Update remote server
-        # - Send email notification
-        # - Log to database
-        # - Trigger another action
-        # etc.
+        logging.info(f"[my-bt-logger] BT Connected: {device} ({ip})")
 
     def on_bt_tether_disconnected(self, agent, event_data):
         """Handle bluetooth tether disconnection event."""
         device = event_data.get("device", "unknown")
         reason = event_data.get("reason", "unknown")
-        pwnagotchi_name = event_data.get("pwnagotchi_name", "pwnagotchi")
-
-        logging.info(f"[my-bt-logger] BT Disconnected: {pwnagotchi_name} from {device} (reason: {reason})")
+        logging.info(f"[my-bt-logger] BT Disconnected: {device} (reason: {reason})")
 ```
 
-### Enable Your Custom Plugin
-
-Add to your `config.toml`:
+Enable it in `config.toml`:
 
 ```toml
 [main.plugins.my-bt-logger]
 enabled = true
 ```
 
-Then restart Pwnagotchi:
-
-```bash
-pwnkill
-```
-
-Your plugin will now receive events whenever bt-tether connects or disconnects!
-
 ### Plugin Development Tips
 
-- **Event method naming**: Pwnagotchi automatically dispatches events to methods named `on_<event_name>`
-- **Agent reference**: The `agent` parameter provides access to Pwnagotchi's main agent instance
-- **Non-blocking**: Keep event handlers fast and non-blocking; offload heavy work to background threads
+- **Event method naming**: Pwnagotchi dispatches events to methods named `on_<event_name>`
+- **Non-blocking**: Keep event handlers fast; offload heavy work to background threads
 - **Error handling**: Wrap your logic in try/except to prevent one plugin from affecting others
 - **Logging**: Use Python's `logging` module for consistent output (visible via `pwnlog`)
 
-### Example: Discord Notifications
+## Related Plugins
 
-A full example is included in this repository: **[bt-tether-discord](../bt-tether-discord/)** plugin. It listens to `bt_tether_connected` and sends a formatted embed to a Discord webhook.
+These companion plugins extend `bt-tether` by listening to its connection events:
+
+| Plugin                                       | Events Used                                           | Description                                                                  |
+| -------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------- |
+| [bt-tether-discord](../bt-tether-discord/)   | `bt_tether_connected`, `bt_tether_disconnected`   | Sends Discord embed notifications when BT tethering connects or disconnects  |
+| [bt-tether-telegram](../bt-tether-telegram/) | `bt_tether_connected`                               | Sends Telegram messages when BT tethering connects                           |
+| [bt-tether-helper](../bt-tether-helper/)     | —                                                     | Helper utilities for BT tether integrations                                  |
+
+Use these plugins as reference implementations when building your own custom integrations.
 
 ## Troubleshooting
 
@@ -470,99 +315,70 @@ A full example is included in this repository: **[bt-tether-discord](../bt-tethe
 - Ensure Bluetooth is enabled on your phone
 - Make sure your phone is in Bluetooth settings (visible/discoverable)
 - Check that pairing dialog appears on phone within 90 seconds
-- Try unpairing the device first, then pair again
+- Try disconnecting the device first, then scan and pair again
 
 ### Connection Succeeds but No Internet
 
 - Enable Bluetooth tethering in your phone's settings
 - Check that your phone has an active internet connection (mobile data or WiFi)
 - Use the **"Test Internet Connectivity"** button in the web interface to diagnose the issue
-- Check if USB is connected - if so, USB may be taking priority (see Active Route display)
+- Check if USB is connected — USB takes priority over Bluetooth (see Active Connection in web UI)
 - Try disconnecting and reconnecting
 
 ### Bluetooth Service Unresponsive
 
-- The plugin automatically detects and restarts hung Bluetooth services
+- The plugin automatically restarts hung Bluetooth services on startup
 - Manual restart: `sudo systemctl restart bluetooth`
 - Check logs: `pwnlog`
 
 ### Ghost Connections from Previous bt-tether Plugin
 
-**⚠️ Important:** If you previously used the default `bt-tether.py` plugin and are now switching to `bt-tether`, you may have "ghost" connection profiles left behind by NetworkManager. These can cause conflicts between NetworkManager and D-Bus/BlueZ, resulting in strange connection issues, failed pairings, or inability to connect.
+If you previously used the default `bt-tether.py` plugin, you may have ghost connection profiles left behind by NetworkManager that cause conflicts.
 
 **Symptoms:**
-
 - Connection fails intermittently with D-Bus/BlueZ errors
-- Strange behavior when pairing or connecting
-- Multiple connection attempts required to establish connection
+- Multiple connection attempts required
 - "Device already connected" errors despite no active connection
 
-**To Check for Ghost Profiles:**
+**Fix:**
 
 ```bash
 # List all NetworkManager connections
 sudo nmcli connection show
 
-# List stored connection files
-ls /etc/NetworkManager/system-connections/
-```
-
-Look for any Bluetooth tethering connections from your previous phone device names.
-
-**To Remove Ghost Profiles:**
-
-```bash
-# Remove by UUID (from nmcli connection show output)
+# Remove ghost profiles by UUID
 sudo nmcli connection delete <uuid>
 
-# Remove stored connection file by name
+# Or remove stored connection files directly
 sudo rm /etc/NetworkManager/system-connections/'phonename.nmconnection'
-```
 
-Replace `<uuid>` with the UUID from the `nmcli connection show` output and `phonename.nmconnection` with the actual filename.
-
-After removing ghost profiles, restart the plugin:
-
-```bash
+# Restart
 pwnkill
 ```
 
 ### Device Won't Disconnect
 
-- Use the "Disconnect" button in web interface (automatically blocks device)
+- Use the "Disconnect" button in web interface (disconnects, blocks, and unpairs the device)
 - Manual command: `bluetoothctl disconnect XX:XX:XX:XX:XX:XX`
-- If still connected, unpair the device
-
-## Advanced
-
-### MAC Addresses and Randomization
-
-You do **not** need to find or enter your phone's MAC address manually. The web interface can scan and pair automatically, and the plugin handles MAC randomization for both iOS and Android.
 
 ## API Endpoints
 
-The plugin provides REST API endpoints for external control. The web interface is the recommended way to manage devices. Device selection and MAC address management are handled internally by the plugin:
+The plugin provides REST API endpoints for external control:
 
-- `GET /plugins/bt-tether` - Web interface
-- `POST /plugins/bt-tether/connect` - Initiate connection (device selection handled by plugin)
-- `POST /plugins/bt-tether/disconnect` - Disconnect device
-- `POST /plugins/bt-tether/unpair` - Unpair device
-- `GET /plugins/bt-tether/status` - Get current status
-- `GET /plugins/bt-tether/pair-status` - Check pairing status
-- `GET /plugins/bt-tether/connection-status` - Full connection details
-- `GET /plugins/bt-tether/scan` - Scan for devices (30 seconds)
-- `GET /plugins/bt-tether/test-internet` - Test internet connectivity with detailed diagnostics
-
-## Related Plugins
-
-These companion plugins extend `bt-tether` with notification support by listening to its events:
-
-| Plugin                                       | Description                                                     |
-| -------------------------------------------- | --------------------------------------------------------------- |
-| [bt-tether-discord](../bt-tether-discord/)   | Sends a Discord embed when BT tethering connects or disconnects |
-| [bt-tether-telegram](../bt-tether-telegram/) | Sends a Telegram message when BT tethering connects             |
-
-Both plugins use the `bt_tether_connected` and `bt_tether_disconnected` events emitted by this plugin. See each plugin's README for installation and configuration details.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/plugins/bt-tether` | Web interface |
+| `GET` | `/plugins/bt-tether/connect?mac=XX:XX:XX:XX:XX:XX` | Initiate connection (auto-selects device if MAC omitted) |
+| `GET` | `/plugins/bt-tether/disconnect?mac=XX:XX:XX:XX:XX:XX` | Disconnect, block, and remove device |
+| `GET` | `/plugins/bt-tether/pair-device?mac=XX:XX:XX:XX:XX:XX&name=Name` | Pair and connect to a new device |
+| `GET` | `/plugins/bt-tether/status` | Plugin status (state, flags, current MAC) |
+| `GET` | `/plugins/bt-tether/connection-status?mac=XX:XX:XX:XX:XX:XX` | Full connection details (paired, trusted, connected, PAN, IP) |
+| `GET` | `/plugins/bt-tether/pair-status?mac=XX:XX:XX:XX:XX:XX` | Check pairing status |
+| `GET` | `/plugins/bt-tether/trusted-devices` | List trusted devices with NAP capability |
+| `GET` | `/plugins/bt-tether/scan` | Start device discovery (30 seconds) |
+| `GET` | `/plugins/bt-tether/scan-progress` | Poll scan progress and discovered devices |
+| `GET` | `/plugins/bt-tether/test-internet` | Run connectivity diagnostics |
+| `GET` | `/plugins/bt-tether/logs` | Get plugin log buffer |
 
 ## License
 
