@@ -95,6 +95,7 @@ Access the web interface at: `http://<pwnagotchi-ip>:8080/plugins/bt-tether`
 The interface consists of the following sections:
 
 **Connection Status** — Main panel showing:
+
 - **Trusted Devices**: Lists paired devices with tethering capability
 - **Status Indicators**: Real-time Paired / Trusted / Connected / Internet status with checkmarks
 - **Active Connection**: Shows which network interface is handling internet traffic (Bluetooth, USB, Ethernet, Wi-Fi) with standby notifications when a higher-priority interface is active
@@ -102,14 +103,17 @@ The interface consists of the following sections:
 - **Output Log**: Live scrolling log of plugin activity (pairing, connecting, errors)
 
 **Connect / Disconnect** — Action buttons:
+
 - **Connect to Phone**: Initiates connection to a trusted device (hidden when already connected)
 - **Disconnect**: Disconnects, blocks, and unpairs the device. Requires re-pairing to connect again
 
 **Discover Devices** — Only shown when no trusted devices exist:
+
 - **Scan**: Discovers nearby Bluetooth devices (30 second scan with live results)
 - **Pair**: One-click pairing from the discovered devices list
 
 **Test Internet Connectivity** — Only shown when connected:
+
 - Runs ping, DNS, IP, default route, and localhost route diagnostics
 
 ### Network Priority
@@ -124,19 +128,19 @@ The plugin provides two display modes that can be used independently or together
 
 Single-letter indicator showing current state:
 
-| Letter | State | Description |
-|--------|-------|-------------|
-| **I** | Initializing | Plugin startup, Bluetooth service restarting |
-| **S** | Scanning | Device discovery in progress |
-| **P** | Pairing | Pairing with phone in progress |
-| **T** | Trusting / Untrusting | Trusting device or removing trust |
-| **>** | Connecting | Connection in progress |
-| **R** | Reconnecting | Auto-reconnection attempt |
-| **C** | Connected | Connected with internet (PAN active) |
-| **N** | No internet | Connected but PAN not active |
-| **D** | Disconnecting | Disconnect in progress |
-| **X** | Disconnected | No device or not connected |
-| **?** | Error | Unknown state or error |
+| Letter | State                 | Description                                  |
+| ------ | --------------------- | -------------------------------------------- |
+| **I**  | Initializing          | Plugin startup, Bluetooth service restarting |
+| **S**  | Scanning              | Device discovery in progress                 |
+| **P**  | Pairing               | Pairing with phone in progress               |
+| **T**  | Trusting / Untrusting | Trusting device or removing trust            |
+| **>**  | Connecting            | Connection in progress                       |
+| **R**  | Reconnecting          | Auto-reconnection attempt                    |
+| **C**  | Connected             | Connected with internet (PAN active)         |
+| **N**  | No internet           | Connected but PAN not active                 |
+| **D**  | Disconnecting         | Disconnect in progress                       |
+| **X**  | Disconnected          | No device or not connected                   |
+| **?**  | Error                 | Unknown state or error                       |
 
 Position can be customized with `mini_status_position = [x, y]` (default: `[110, 0]`).
 
@@ -144,23 +148,23 @@ Position can be customized with `mini_status_position = [x, y]` (default: `[110,
 
 Full status line at a configurable position:
 
-| Display | Meaning |
-|---------|---------|
-| **BT:Initializing** | Plugin initializing |
-| **BT:Scanning** | Scanning for devices |
-| **BT:Pairing** | Pairing in progress |
-| **BT:Trusting** | Trusting device |
-| **BT:Connecting...** | Connection in progress |
-| **BT:Reconnecting...** | Auto-reconnection attempt |
-| **BT:192.168.44.2** | Connected with IP address |
-| **BT:Connected** | Connected (PAN active, no IP yet) |
-| **BT:Trusted** | Connected and trusted (no PAN) |
-| **BT:Paired** | Paired but not connected |
-| **BT:Disconnecting...** | Disconnect in progress |
-| **BT:Untrusting...** | Removing trust from device |
-| **BT:Disconnected** | Not connected |
-| **BT:No device** | No paired device found |
-| **BT:Error** | Error or unknown state |
+| Display                 | Meaning                           |
+| ----------------------- | --------------------------------- |
+| **BT:Initializing**     | Plugin initializing               |
+| **BT:Scanning**         | Scanning for devices              |
+| **BT:Pairing**          | Pairing in progress               |
+| **BT:Trusting**         | Trusting device                   |
+| **BT:Connecting...**    | Connection in progress            |
+| **BT:Reconnecting...**  | Auto-reconnection attempt         |
+| **BT:192.168.44.2**     | Connected with IP address         |
+| **BT:Connected**        | Connected (PAN active, no IP yet) |
+| **BT:Trusted**          | Connected and trusted (no PAN)    |
+| **BT:Paired**           | Paired but not connected          |
+| **BT:Disconnecting...** | Disconnect in progress            |
+| **BT:Untrusting...**    | Removing trust from device        |
+| **BT:Disconnected**     | Not connected                     |
+| **BT:No device**        | No paired device found            |
+| **BT:Error**            | Error or unknown state            |
 
 Position can be customized with `detailed_status_position = [x, y]` (default: `[0, 82]`).
 
@@ -214,6 +218,7 @@ When a connection drops (phone BT disabled, out of range, etc.):
 5. **On failure**: Increments failure counter (max 5 attempts), then enters cooldown
 
 **Error classification:**
+
 - **Transient errors** (page-timeout, host-down): Pairing is preserved, retry later
 - **Permanent errors** (authentication rejected, connection refused): Pairing removed, re-pairing needed
 
@@ -300,11 +305,10 @@ enabled = true
 
 These companion plugins extend `bt-tether` by listening to its connection events:
 
-| Plugin                                       | Events Used                                           | Description                                                                  |
-| -------------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------- |
-| [bt-tether-discord](../bt-tether-discord/)   | `bt_tether_connected`, `bt_tether_disconnected`   | Sends Discord embed notifications when BT tethering connects or disconnects  |
-| [bt-tether-telegram](../bt-tether-telegram/) | `bt_tether_connected`                               | Sends Telegram messages when BT tethering connects                           |
-| [bt-tether-helper](../bt-tether-helper/)     | —                                                     | Helper utilities for BT tether integrations                                  |
+| Plugin                                       | Description                                                   |
+| -------------------------------------------- | ------------------------------------------------------------- |
+| [bt-tether-discord](../bt-tether-discord/)   | Sends a Discord embed notification when BT tethering connects |
+| [bt-tether-telegram](../bt-tether-telegram/) | Sends a Telegram message when BT tethering connects           |
 
 Use these plugins as reference implementations when building your own custom integrations.
 
@@ -336,6 +340,7 @@ Use these plugins as reference implementations when building your own custom int
 If you previously used the default `bt-tether.py` plugin, you may have ghost connection profiles left behind by NetworkManager that cause conflicts.
 
 **Symptoms:**
+
 - Connection fails intermittently with D-Bus/BlueZ errors
 - Multiple connection attempts required
 - "Device already connected" errors despite no active connection
@@ -365,20 +370,20 @@ pwnkill
 
 The plugin provides REST API endpoints for external control:
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/plugins/bt-tether` | Web interface |
-| `GET` | `/plugins/bt-tether/connect?mac=XX:XX:XX:XX:XX:XX` | Initiate connection (auto-selects device if MAC omitted) |
-| `GET` | `/plugins/bt-tether/disconnect?mac=XX:XX:XX:XX:XX:XX` | Disconnect, block, and remove device |
-| `GET` | `/plugins/bt-tether/pair-device?mac=XX:XX:XX:XX:XX:XX&name=Name` | Pair and connect to a new device |
-| `GET` | `/plugins/bt-tether/status` | Plugin status (state, flags, current MAC) |
-| `GET` | `/plugins/bt-tether/connection-status?mac=XX:XX:XX:XX:XX:XX` | Full connection details (paired, trusted, connected, PAN, IP) |
-| `GET` | `/plugins/bt-tether/pair-status?mac=XX:XX:XX:XX:XX:XX` | Check pairing status |
-| `GET` | `/plugins/bt-tether/trusted-devices` | List trusted devices with NAP capability |
-| `GET` | `/plugins/bt-tether/scan` | Start device discovery (30 seconds) |
-| `GET` | `/plugins/bt-tether/scan-progress` | Poll scan progress and discovered devices |
-| `GET` | `/plugins/bt-tether/test-internet` | Run connectivity diagnostics |
-| `GET` | `/plugins/bt-tether/logs` | Get plugin log buffer |
+| Method | Endpoint                                                         | Description                                                   |
+| ------ | ---------------------------------------------------------------- | ------------------------------------------------------------- |
+| `GET`  | `/plugins/bt-tether`                                             | Web interface                                                 |
+| `GET`  | `/plugins/bt-tether/connect?mac=XX:XX:XX:XX:XX:XX`               | Initiate connection (auto-selects device if MAC omitted)      |
+| `GET`  | `/plugins/bt-tether/disconnect?mac=XX:XX:XX:XX:XX:XX`            | Disconnect, block, and remove device                          |
+| `GET`  | `/plugins/bt-tether/pair-device?mac=XX:XX:XX:XX:XX:XX&name=Name` | Pair and connect to a new device                              |
+| `GET`  | `/plugins/bt-tether/status`                                      | Plugin status (state, flags, current MAC)                     |
+| `GET`  | `/plugins/bt-tether/connection-status?mac=XX:XX:XX:XX:XX:XX`     | Full connection details (paired, trusted, connected, PAN, IP) |
+| `GET`  | `/plugins/bt-tether/pair-status?mac=XX:XX:XX:XX:XX:XX`           | Check pairing status                                          |
+| `GET`  | `/plugins/bt-tether/trusted-devices`                             | List trusted devices with NAP capability                      |
+| `GET`  | `/plugins/bt-tether/scan`                                        | Start device discovery (30 seconds)                           |
+| `GET`  | `/plugins/bt-tether/scan-progress`                               | Poll scan progress and discovered devices                     |
+| `GET`  | `/plugins/bt-tether/test-internet`                               | Run connectivity diagnostics                                  |
+| `GET`  | `/plugins/bt-tether/logs`                                        | Get plugin log buffer                                         |
 
 ## License
 
