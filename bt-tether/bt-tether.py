@@ -564,8 +564,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                       <b>${device.name}</b><br>
                       <small style="color: #888;">${device.mac}</small>
                     </div>
-                    <button onclick="pairAndConnectDevice('${device.mac}', '${device.name.replace(/'/g, "\\'")}'); return false;" class="success" style="margin: 0; padding: 6px 12px; font-size: 12px;">Pair</button>
+                    <button class="success pair-btn" style="margin: 0; padding: 6px 12px; font-size: 12px;">Pair</button>
                   `;
+                  const btn = div.querySelector('.pair-btn');
+                  btn.addEventListener('click', () => pairAndConnectDevice(device.mac, device.name));
                   deviceList.appendChild(div);
                 });
                 scanStatus.innerHTML = `<span class="spinner"></span> Found ${progressData.devices.length} device(s)... still scanning`;
