@@ -30,10 +30,36 @@ MANUFACTURER_ID = 0xDEAD
 
 class GhostMesh(Plugin):
     __author__ = "Gemini & GhostMesh"
-    __version__ = "44.2.0"
+    __version__ = "1.0.0"
 
     # Allow POST requests without CSRF token
     csrf_exempt = True
+
+    # Configuration options (can be overridden in config.toml)
+    options = {
+        "enabled": {"default": True, "help": "Enable/disable GhostMesh plugin"},
+        "stealth": {"default": True, "help": "Start in stealth mode (no broadcasting)"},
+        "broadcast_interval": {
+            "default": 60,
+            "help": "Seconds between broadcast cycles (15s on + rest off)",
+        },
+        "peer_detection_cooldown": {
+            "default": 5,
+            "help": "Cooldown period in seconds before detecting same peer again",
+        },
+        "scanner_heartbeat": {
+            "default": 30,
+            "help": "Scanner status log interval in seconds",
+        },
+        "pwngrid_timeout": {
+            "default": 10,
+            "help": "Local pwngrid request timeout in seconds",
+        },
+        "grid_sync_interval": {
+            "default": 300,
+            "help": "Periodic grid sync interval in seconds (auto mode only)",
+        },
+    }
 
     def __init__(self):
         self.running = False
@@ -41,22 +67,36 @@ class GhostMesh(Plugin):
         self.peers = {}
         self.identity_cache = {}
         self._hmac_index = {}
-        self._seen_hmacs = {}  # Track HMACs with 5-second dedup window
+        self._seen_hmacs = {}  # Track HMACs with peer_detection_cooldown
 
         self.plugin_dir = os.path.dirname(os.path.realpath(__file__))
         self.history_path = os.path.join(self.plugin_dir, "ghost-mesh-peers.json")
 
+        # Load config with defaults
+        self.stealth_mode = self.options["stealth"]["default"]
+        self.broadcast_interval = self.options["broadcast_interval"]["default"]
+        self.peer_detection_cooldown = self.options["peer_detection_cooldown"][
+            "default"
+        ]
+        self.scanner_heartbeat = self.options["scanner_heartbeat"]["default"]
+        self.pwngrid_timeout = self.options["pwngrid_timeout"]["default"]
+        self.grid_sync_interval = self.options["grid_sync_interval"]["default"]
+
         self.sync_status = "Waiting..."
         self.pulse_status = "Off"
-        self.stealth_mode = True  # Default to Stealth for Privacy & SD longevity
         self.packets_processed = 0  # RAM-only heartbeat
+        self.last_sync_time = 0  # Track when we last attempted sync
+        self.sync_attempts = 0  # Count sync attempts
 
         self._lescan_proc = None
         self._my_hmac = None
 
         self._broadcast_thread = None
         self._broadcast_stop = threading.Event()
+        self._sync_thread = None
+        self._sync_stop = threading.Event()
         self._agent = None
+        self._last_known_mode = None  # Track mode for detecting switches
 
     # --- UI & WEBHOOK LOGIC ---------------------------------------------------
 
@@ -73,18 +113,6 @@ class GhostMesh(Plugin):
             else:
                 self._start_broadcasting()
             return jsonify({"success": True, "stealth": self.stealth_mode})
-
-        if clean_path == "sync":
-            mode = self._get_mode()
-            if mode != "auto" and mode != "unknown":
-                return jsonify(
-                    {
-                        "success": False,
-                        "message": f"Grid unavailable ({mode} mode — pwngrid only runs in auto)",
-                    }
-                )
-            threading.Thread(target=self._pwngrid_sync_once, daemon=True).start()
-            return jsonify({"success": True, "message": "Grid sync started"})
 
         if clean_path == "test-scan":
             """Simulate receiving a peer's advertisement for testing parser logic."""
@@ -151,6 +179,9 @@ class GhostMesh(Plugin):
             )
 
         if clean_path == "status":
+            seconds_since_sync = (
+                int(time.time() - self.last_sync_time) if self.last_sync_time else -1
+            )
             return jsonify(
                 {
                     "stealth": self.stealth_mode,
@@ -158,6 +189,11 @@ class GhostMesh(Plugin):
                     "packets": self.packets_processed,
                     "sync": self.sync_status,
                     "peer_count": len(self.peers),
+                    "polling_active": self._sync_thread
+                    and self._sync_thread.is_alive(),
+                    "sync_attempts": self.sync_attempts,
+                    "seconds_since_last_sync": seconds_since_sync,
+                    "grid_sync_interval": self.grid_sync_interval,
                     "peers": {
                         k: {**v, "last_seen": int(time.time() - v.get("last_seen", 0))}
                         for k, v in self.peers.items()
@@ -209,8 +245,6 @@ class GhostMesh(Plugin):
             {% if not p %}<p class='no-peers'>No ghosts heard yet. Scanning the ether...</p>{% endif %}
         </div>
 
-        <button onclick='gridSync()' style='background:none; border:none; color:#333; cursor:pointer; font-size:0.8em; margin-top:30px;'>[ Manual Grid Sync ]</button>
-
         <script>
         // Poll status every 2 seconds and update DOM without full refresh
         function updateStatus() {
@@ -249,16 +283,6 @@ class GhostMesh(Plugin):
         function toggleStealth() {
             fetch('/plugins/ghost-mesh/toggle-stealth').then(r => r.json()).then(d => { 
                 if(d.success) location.reload(); 
-            });
-        }
-        
-        function gridSync() {
-            var btn = event.target;
-            btn.textContent = '[ Syncing... ]';
-            btn.style.color = '#0f0';
-            fetch('/plugins/ghost-mesh/sync').then(r => r.json()).then(d => {
-                btn.style.color = d.success ? '#0f0' : '#f00';
-                setTimeout(() => { btn.textContent = '[ Grid Sync ]'; btn.style.color = '#333'; }, 3000);
             });
         }
         
@@ -327,8 +351,8 @@ class GhostMesh(Plugin):
                             "[ghost-mesh] Broadcast failed 3x, check BLE adapter"
                         )
 
-                # 15s broadcast + 45s silence = 60s cycle
-                self._broadcast_stop.wait(60)
+                # 15s broadcast + silence = broadcast_interval cycle
+                self._broadcast_stop.wait(self.broadcast_interval)
 
             except Exception as e:
                 logging.error(f"[ghost-mesh] Broadcast error: {e}")
@@ -416,7 +440,7 @@ class GhostMesh(Plugin):
             return False
 
     def _process_hmac(self, rx_hmac, source):
-        """Process detected HMAC with 5-second dedup window.
+        """Process detected HMAC with configurable peer_detection_cooldown.
 
         Args:
             rx_hmac: HEX string of detected HMAC (e.g., '2f3ca25da826')
@@ -424,10 +448,10 @@ class GhostMesh(Plugin):
         """
         current_time = time.time()
 
-        # Check dedup window
+        # Check cooldown period
         last_seen = self._seen_hmacs.get(rx_hmac, 0)
-        if current_time - last_seen < 5:
-            return  # Already logged recently, skip
+        if current_time - last_seen < self.peer_detection_cooldown:
+            return  # Already detected recently, skip
 
         # Update last seen time
         self._seen_hmacs[rx_hmac] = current_time
@@ -554,10 +578,6 @@ class GhostMesh(Plugin):
         found_company = False
 
         try:
-            logging.info(
-                "[ghost-mesh] btmon parser started (detecting 0xDEAD manufacturer data)..."
-            )
-
             for line in iter(self._lescan_proc.stdout.readline, ""):
                 if not self.running:
                     break
@@ -604,19 +624,18 @@ class GhostMesh(Plugin):
                                 found_company = False
 
                     except Exception as e:
-                        logging.debug(f"[ghost-mesh] Data extraction error: {e}")
                         found_company = False
 
                 # Reset state on new advertisement event
                 if "> HCI Event:" in line:
                     found_company = False
 
-                # Keep-alive logging every 30 seconds
+                # Keep-alive logging every scanner_heartbeat seconds
                 current_time = time.time()
-                if current_time - last_log_time >= 30:
+                if current_time - last_log_time >= self.scanner_heartbeat:
                     peer_count = len(self.peers)
                     logging.info(
-                        f"[ghost-mesh] Scanner active — {total_lines} lines processed, {peer_count} peers, {self.packets_processed} packets"
+                        f"[ghost-mesh] Scanner: {peer_count} peers, {self.packets_processed} packets"
                     )
                     last_log_time = current_time
 
@@ -668,62 +687,158 @@ class GhostMesh(Plugin):
             logging.error(f"[ghost-mesh] lescan error: {e}")
 
     def _resolve_and_update(self, rx_hmac):
-        """Match received HMAC to a known identity or create ghost entry."""
+        """Match received HMAC to a known identity via reverse lookup, or create ghost entry.
+
+        Logic:
+        1. Try reverse HMAC lookup: compute HMAC for each known fingerprint
+        2. If match found → update peer with known identity
+        3. If no match → create ghost entry and save to disk
+        """
         with self.lock:
-            fp = self._hmac_index.get(rx_hmac)
-            if fp:
-                id_data = self.identity_cache.get(fp, {})
-                self.peers[fp] = {
+            # Try reverse HMAC lookup against known fingerprints
+            matched_fp = None
+            for fp in self.identity_cache.keys():
+                computed_hmac = self._make_hmac(fp)
+                if computed_hmac == rx_hmac:
+                    matched_fp = fp
+                    break
+
+            if matched_fp:
+                # Known peer matched
+                id_data = self.identity_cache.get(matched_fp, {})
+                self.peers[matched_fp] = {
                     "name": id_data.get("name", f"Peer [{rx_hmac}]"),
                     "face": id_data.get("face", "(◕‿◕)"),
                     "last_seen": time.time(),
                     "hmac": rx_hmac,
                 }
             else:
-                self.peers[f"ghost_{rx_hmac}"] = {
+                # Unknown HMAC — create ghost entry
+                ghost_key = f"ghost_{rx_hmac}"
+                self.peers[ghost_key] = {
                     "name": f"Ghost [{rx_hmac}]",
                     "face": "( ? _ ? )",
                     "last_seen": time.time(),
                     "hmac": rx_hmac,
                 }
+                # Save peers (known + ghosts) to disk
+                self._save_peers_to_disk()
+
+    def _sync_loop(self):
+        """Background thread for periodic grid sync.
+
+        Only runs in auto mode to avoid interfering with bettercap startup.
+        Retries every grid_sync_interval seconds. Useful for picking up
+        grid units once internet connectivity becomes available.
+        Also detects mode switches and triggers immediate sync on manual→auto.
+        """
+        while self.running and not self._sync_stop.is_set():
+            # Check current mode and only sync in auto
+            current_mode = self._get_mode()
+
+            # On mode switch to auto, trigger immediate sync
+            if (
+                self._last_known_mode
+                and self._last_known_mode != "auto"
+                and current_mode == "auto"
+            ):
+                logging.info(
+                    f"[ghost-mesh] Mode switched to auto! Triggering immediate sync..."
+                )
+                try:
+                    self._pwngrid_sync_once()
+                except Exception as e:
+                    logging.error(f"[ghost-mesh] Mode-switch sync error: {e}")
+
+            self._last_known_mode = current_mode
+
+            # Only sync in auto mode
+            if current_mode == "auto":
+                try:
+                    self._pwngrid_sync_once()
+                except Exception as e:
+                    logging.error(f"[ghost-mesh] Sync loop error: {e}")
+            else:
+                # In manual/ai/unknown mode, just update status
+                if self.sync_status not in ["Waiting...", f"Mode: {current_mode}"]:
+                    self.sync_status = f"Mode: {current_mode}"
+
+            # Wait for next sync interval, but be responsive to stop signal
+            self._sync_stop.wait(self.grid_sync_interval)
 
     # --- GRID SYNC ------------------------------------------------------------
 
     def _pwngrid_sync_once(self):
-        """Pull identities from pwngrid hot units list."""
+        """Pull identities from local pwngrid hot units list."""
+        self.last_sync_time = time.time()
+        self.sync_attempts += 1
+        logging.debug(
+            f"[ghost-mesh] Sync attempt #{self.sync_attempts} to {PWNGRID_HOT}"
+        )
+
         try:
             self.sync_status = "Syncing..."
-            r = requests.get(PWNGRID_HOT, timeout=10)
+            r = requests.get(PWNGRID_HOT, timeout=self.pwngrid_timeout)
+            logging.debug(f"[ghost-mesh] Pwngrid response: {r.status_code}")
+
             if r.status_code == 200:
                 data = r.json()
                 units = data if isinstance(data, list) else data.get("units", [])
-                new_found = False
-                with self.lock:
-                    for u in units:
-                        fp = u.get("fingerprint")
-                        if fp and fp not in self.identity_cache:
-                            self.identity_cache[fp] = {
-                                "name": u.get("name", "Unknown"),
-                                "face": u.get("face", "(◕‿◕)"),
-                            }
-                            self._hmac_index[self._make_hmac(fp)] = fp
-                            new_found = True
-                if new_found:
-                    try:
-                        with open(self.history_path, "w") as f:
-                            json.dump(self.identity_cache, f)
-                    except Exception:
-                        pass
-                self.sync_status = f"Synced ({len(self.identity_cache)} souls)"
+                if units:
+                    self._process_units(units)
+                    self.sync_status = f"✓ Synced ({len(self.identity_cache)} souls)"
+                    logging.info(
+                        f"[ghost-mesh] ✓ Synced {len(units)} units from local pwngrid"
+                    )
+                    return
+                else:
+                    self.sync_status = "No units published yet"
+                    logging.info("[ghost-mesh] Pwngrid returned 200 but no units")
             else:
-                self.sync_status = f"Grid error ({r.status_code})"
-        except requests.exceptions.ConnectionError:
+                self.sync_status = f"Pwngrid {r.status_code}"
+                logging.warning(
+                    f"[ghost-mesh] Local pwngrid returned {r.status_code} — is pwngrid running?"
+                )
+
+        except requests.exceptions.ConnectionError as e:
             self.sync_status = "Grid offline"
+            logging.debug(f"[ghost-mesh] Local pwngrid connection refused: {e}")
+        except requests.exceptions.Timeout:
+            self.sync_status = "Grid timeout"
+            logging.warning(
+                f"[ghost-mesh] Local pwngrid timeout ({self.pwngrid_timeout}s)"
+            )
         except Exception as e:
-            self.sync_status = "Sync failed"
+            self.sync_status = "Sync error"
             logging.error(f"[ghost-mesh] Grid sync failed: {e}")
 
+    def _process_units(self, units):
+        """Process unit list from any source (pwngrid or OpenPwnGrid)."""
+        new_found = False
+        with self.lock:
+            for u in units:
+                fp = u.get("fingerprint")
+                if fp and fp not in self.identity_cache:
+                    self.identity_cache[fp] = {
+                        "name": u.get("name", "Unknown"),
+                        "face": u.get("face", "(◕‿◕)"),
+                    }
+                    self._hmac_index[self._make_hmac(fp)] = fp
+                    new_found = True
+
+        if new_found:
+            # Save all peers (known + ghosts) to disk
+            self._save_peers_to_disk()
+
     # --- HELPERS --------------------------------------------------------------
+
+    def _save_peers_to_disk(self):
+        """Persist all peers (known identities + ghosts) to disk."""
+        try:
+            with open(self.history_path, "w") as f:
+                json.dump(self.peers, f, indent=2)
+        except Exception:
+            pass
 
     def _make_hmac(self, fingerprint: str) -> str:
         """Create a 12-char hex HMAC from a fingerprint string."""
@@ -755,17 +870,28 @@ class GhostMesh(Plugin):
                 pass
         self._my_hmac = self._make_hmac(my_fp)
 
-        # Load known souls from disk (once at startup)
+        # Load peers from disk (both known identities and ghosts)
         if os.path.exists(self.history_path):
             try:
                 with open(self.history_path, "r") as f:
-                    self.identity_cache = json.load(f)
-                self._hmac_index = {
-                    self._make_hmac(fp): fp for fp in self.identity_cache
-                }
+                    data = json.load(f)
+                    self.peers = data  # Load all (ghosts + known)
+                    # Separate known peers from ghosts to rebuild identity cache
+                    for k, v in data.items():
+                        if not k.startswith("ghost_"):
+                            self.identity_cache[k] = v
+                    # Rebuild HMAC index from known identities
+                    self._hmac_index = {
+                        self._make_hmac(fp): fp for fp in self.identity_cache
+                    }
             except Exception:
                 self.identity_cache = {}
                 self._hmac_index = {}
+                self.peers = {}
+        else:
+            self.identity_cache = {}
+            self._hmac_index = {}
+            self.peers = {}
 
         self.running = True
 
@@ -779,20 +905,22 @@ class GhostMesh(Plugin):
         """Called when pwnagotchi is fully ready."""
         # Store agent ref for mode detection
         self._agent = agent
+        self._last_known_mode = self._get_mode()
 
         if not self.stealth_mode:
             self._start_broadcasting()
 
-        # Auto-sync grid if pwngrid is running (auto mode only)
+        # Start background sync thread for periodic retries (only syncs in auto mode)
+        self._sync_stop.clear()
+        self._sync_thread = threading.Thread(
+            target=self._sync_loop, daemon=True, name="ghost-mesh-sync"
+        )
+        self._sync_thread.start()
+
         mode = self._get_mode()
-        if mode == "auto":
-            threading.Thread(target=self._pwngrid_sync_once, daemon=True).start()
-            logging.info("[ghost-mesh] Auto mode detected — grid sync started")
-        else:
-            self.sync_status = f"Grid unavailable ({mode} mode)"
-            logging.info(
-                f"[ghost-mesh] {mode} mode — pwngrid not available, skipping grid sync"
-            )
+        logging.info(
+            f"[ghost-mesh] Periodic grid sync started (interval: {self.grid_sync_interval}s, mode: {mode}, syncs in AUTO mode only)"
+        )
 
     def on_bt_tether_connected(self, agent, data):
         """Called when BLE adapter is fully ready.
@@ -808,6 +936,7 @@ class GhostMesh(Plugin):
         """Clean shutdown."""
         self.running = False
         self._broadcast_stop.set()
+        self._sync_stop.set()
         if self._lescan_proc:
             try:
                 self._lescan_proc.kill()
