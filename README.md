@@ -36,6 +36,28 @@ Simple plugin to display **current time and date** on the Pwnagotchi screen with
 
 ---
 
+### 📱 pwn-companion
+
+Real-time **WebSocket server** for communicating with pwnagotchi from a mobile app.
+
+- 🔌 **WebSocket server** on port 8888 (configurable)
+- 🔐 **Password-based authentication** for secure connections
+- 📍 **GPS location support** - share your location with pwnagotchi
+- 🎮 **Custom commands** - extensible command system
+- 📊 **Live status display** on pwnagotchi screen
+- 🔄 **Multiple concurrent clients** supported
+- 📝 **Protocol documentation** and mobile app examples included
+
+**[📖 Full documentation →](pwn-companion/README.md)**
+
+**[📱 Mobile App Guide →](pwn-companion/MOBILE_APP.md)**
+
+**[🧪 Test Client →](pwn-companion/test_client.py)**
+
+> Quick test with: `python3 pwn-companion/test_client.py --host <your-pwnagotchi-ip>`
+
+---
+
 ## 🚀 Quick Start
 
 For any plugin, copy to your custom plugins directory and enable in config:
