@@ -559,13 +559,23 @@ HTML_TEMPLATE = """<!DOCTYPE html>
                 progressData.devices.forEach(device => {
                   const div = document.createElement('div');
                   div.className = 'device-item';
-                  div.innerHTML = `
-                    <div style="flex: 1; font-family: 'Courier New', monospace; font-size: 12px;">
-                      <b>${device.name}</b><br>
-                      <small style="color: #888;">${device.mac}</small>
-                    </div>
-                    <button onclick="pairAndConnectDevice('${device.mac}', '${device.name.replace(/'/g, "\\'")}'); return false;" class="success" style="margin: 0; padding: 6px 12px; font-size: 12px;">Pair</button>
-                  `;
+                  const nameSpan = document.createElement('b');
+                  nameSpan.textContent = device.name;
+                  const macSpan = document.createElement('small');
+                  macSpan.style.color = '#888';
+                  macSpan.textContent = device.mac;
+                  const infoDiv = document.createElement('div');
+                  infoDiv.style.cssText = 'flex: 1; font-family: "Courier New", monospace; font-size: 12px;';
+                  infoDiv.appendChild(nameSpan);
+                  infoDiv.appendChild(document.createElement('br'));
+                  infoDiv.appendChild(macSpan);
+                  const pairBtn = document.createElement('button');
+                  pairBtn.className = 'success';
+                  pairBtn.style.cssText = 'margin: 0; padding: 6px 12px; font-size: 12px;';
+                  pairBtn.textContent = 'Pair';
+                  pairBtn.onclick = function() { pairAndConnectDevice(device.mac, device.name); return false; };
+                  div.appendChild(infoDiv);
+                  div.appendChild(pairBtn);
                   deviceList.appendChild(div);
                 });
                 scanStatus.innerHTML = `<span class="spinner"></span> Found ${progressData.devices.length} device(s)... still scanning`;
@@ -676,11 +686,29 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             deviceDiscoverySection.style.display = 'none';
             
             if (connectedDevice) {
-              summaryDiv.innerHTML = `<span style="color: #3fb950;">🔵 Connected to ${connectedDevice.name}</span><br><small style="color: #888;">${connectedDevice.mac}</small>`;
+              summaryDiv.textContent = '';
+              const connSpan = document.createElement('span');
+              connSpan.style.color = '#3fb950';
+              connSpan.textContent = '🔵 Connected to ' + connectedDevice.name;
+              const macSmall = document.createElement('small');
+              macSmall.style.color = '#888';
+              macSmall.textContent = connectedDevice.mac;
+              summaryDiv.appendChild(connSpan);
+              summaryDiv.appendChild(document.createElement('br'));
+              summaryDiv.appendChild(macSmall);
             } else if (napDevices.length > 0) {
-              summaryDiv.innerHTML = napDevices.map(d => 
-                `<div style="margin: 4px 0;">📱 ${d.name}<br><small style="color: #888;">${d.mac}</small></div>`
-              ).join('');
+              summaryDiv.textContent = '';
+              napDevices.forEach(d => {
+                const devDiv = document.createElement('div');
+                devDiv.style.margin = '4px 0';
+                devDiv.textContent = '📱 ' + d.name;
+                const macSmall = document.createElement('small');
+                macSmall.style.color = '#888';
+                macSmall.textContent = d.mac;
+                devDiv.appendChild(document.createElement('br'));
+                devDiv.appendChild(macSmall);
+                summaryDiv.appendChild(devDiv);
+              });
             } else {
               summaryDiv.innerHTML = `<span style="color: #f85149;">${data.devices.length} paired device(s) but none support tethering</span>`;
               // Show device discovery section if no devices support tethering AND not connecting
@@ -1766,13 +1794,13 @@ default-agent
             if self.agent_log_fd:
                 try:
                     os.close(self.agent_log_fd)
-                except:
+                except Exception:
                     pass
                 self.agent_log_fd = None
             if self.agent_log_path and os.path.exists(self.agent_log_path):
                 try:
                     os.remove(self.agent_log_path)
-                except:
+                except Exception:
                     pass
                 self.agent_log_path = None
 
@@ -1805,8 +1833,28 @@ default-agent
             try:
                 with self.lock:
                     connection_in_progress = self._connection_in_progress
+                    # Check if in cooldown - skip expensive bluetoothctl calls
+                    _in_cooldown = (
+                        self._reconnect_failure_count >= self._max_reconnect_failures
+                        and self._first_failure_time is not None
+                    )
+                    if _in_cooldown:
+                        _cooldown_elapsed = (time.time() - self._first_failure_time) >= self._reconnect_failure_cooldown
+                        if _cooldown_elapsed:
+                            self._reconnect_failure_count = 0
+                            self._first_failure_time = None
+                            _in_cooldown = False
+                            self._log(
+                                "INFO",
+                                f"Cooldown period elapsed ({self._reconnect_failure_cooldown}s), resetting failure counter and retrying...",
+                            )
 
                 if connection_in_progress:
+                    time.sleep(self.reconnect_interval)
+                    continue
+
+                if _in_cooldown:
+                    # During cooldown, skip bluetoothctl calls to save CPU on RPi Zero
                     time.sleep(self.reconnect_interval)
                     continue
 
@@ -1900,18 +1948,18 @@ default-agent
                         self.options["mac"] = self.phone_mac
                         # Mark as connected so we don't trigger the second reconnect block
                         self._last_known_connected = True
-                        self._reconnect_failure_count = 0
-                        self._first_failure_time = None
+                        with self.lock:
+                            self._reconnect_failure_count = 0
+                            self._first_failure_time = None
                     else:
                         # Reconnection failed - update last known state to disconnected
                         self._last_known_connected = False
-                        self._reconnect_failure_count += 1
-                        if self._first_failure_time is None:
-                            self._first_failure_time = time.time()
-                        if (
-                            self._reconnect_failure_count
-                            >= self._max_reconnect_failures
-                        ):
+                        with self.lock:
+                            self._reconnect_failure_count += 1
+                            if self._first_failure_time is None:
+                                self._first_failure_time = time.time()
+                            exceeded = self._reconnect_failure_count >= self._max_reconnect_failures
+                        if exceeded:
                             self._log(
                                 "WARNING",
                                 f"⚠️  Auto-reconnect paused after {self._max_reconnect_failures} failed attempts",
@@ -1946,13 +1994,15 @@ default-agent
                 with self.lock:
                     connection_in_progress = self._connection_in_progress
                     user_requested_disconnect = self._user_requested_disconnect
+                    failure_count = self._reconnect_failure_count
+                    first_failure_time = self._first_failure_time
 
                 if (
                     status["paired"]
                     and status["trusted"]
                     and not status["connected"]
                     and not connection_in_progress
-                    and self._reconnect_failure_count < self._max_reconnect_failures
+                    and failure_count < self._max_reconnect_failures
                     and not user_requested_disconnect
                 ):
                     logging.info(
@@ -1976,8 +2026,9 @@ default-agent
 
                     if success:
                         # Reset failure counter on successful connection
-                        self._reconnect_failure_count = 0
-                        self._first_failure_time = None
+                        with self.lock:
+                            self._reconnect_failure_count = 0
+                            self._first_failure_time = None
                         # Update phone_mac to the successful device
                         self.phone_mac = current_mac
                         self.options["mac"] = self.phone_mac
@@ -1985,16 +2036,14 @@ default-agent
                         self._last_known_connected = True
                     else:
                         # Increment failure counter
-                        self._reconnect_failure_count += 1
-                        # Track when failures started
-                        if self._first_failure_time is None:
-                            self._first_failure_time = time.time()
+                        with self.lock:
+                            self._reconnect_failure_count += 1
+                            if self._first_failure_time is None:
+                                self._first_failure_time = time.time()
+                            exceeded = self._reconnect_failure_count >= self._max_reconnect_failures
                         # Update cached UI to show disconnected state after failure
                         self._update_cached_ui_status(mac=current_mac)
-                        if (
-                            self._reconnect_failure_count
-                            >= self._max_reconnect_failures
-                        ):
+                        if exceeded:
                             self._log(
                                 "WARNING",
                                 f"⚠️  Auto-reconnect paused after {self._max_reconnect_failures} failed attempts",
@@ -2010,25 +2059,12 @@ default-agent
                                     False  # Clear flag to show proper status
                                 )
                                 self._screen_needs_refresh = True
-                elif self._reconnect_failure_count >= self._max_reconnect_failures:
-                    # Already exceeded max failures - check if cooldown period has elapsed
-                    if self._first_failure_time:
-                        time_since_first_failure = (
-                            time.time() - self._first_failure_time
-                        )
-                        if time_since_first_failure >= self._reconnect_failure_cooldown:
-                            # Cooldown period elapsed, reset counter and try again
-                            self._log(
-                                "INFO",
-                                f"Cooldown period elapsed ({self._reconnect_failure_cooldown}s), resetting failure counter and retrying...",
-                            )
-                            self._reconnect_failure_count = 0
-                            self._first_failure_time = None
                 elif not status["paired"] or not status["trusted"]:
                     # Device not paired/trusted (or blocked), don't attempt auto-reconnect
                     # Reset failure counter since this is intentional
-                    self._reconnect_failure_count = 0
-                    self._first_failure_time = None
+                    with self.lock:
+                        self._reconnect_failure_count = 0
+                        self._first_failure_time = None
                     logging.debug(
                         f"[bt-tether] Device not ready for auto-reconnect (paired={status['paired']}, trusted={status['trusted']})"
                     )
@@ -2393,9 +2429,9 @@ default-agent
                         self._connection_start_time = time.time()
                         self._user_requested_disconnect = False
                         self._screen_needs_refresh = True
-
-                    # Reset failure counter
-                    self._reconnect_failure_count = 0
+                        # Reset failure counter
+                        self._reconnect_failure_count = 0
+                        self._first_failure_time = None
 
                     # Unpause monitor
                     self._monitor_paused.clear()
@@ -2795,8 +2831,8 @@ default-agent
                 timeout=self.SUBPROCESS_TIMEOUT_LONG,
             )
 
-            if result == "Timeout":
-                self._log("WARNING", "Unpair command timed out")
+            if result is None:
+                self._log("WARNING", "Unpair command timed out or failed")
                 # Still consider it successful - device is likely already gone
                 return {
                     "success": True,
@@ -3175,6 +3211,12 @@ default-agent
                     scan_process.stdin.flush()
                 except Exception as e:
                     self._log("ERROR", f"Failed to start scan: {e}")
+                    if scan_process:
+                        try:
+                            scan_process.kill()
+                            scan_process.wait(timeout=2)
+                        except Exception:
+                            pass
                     scan_process = None
 
                 if scan_process:
@@ -3327,10 +3369,10 @@ default-agent
             return []
 
     def start_connection(self):
-        with self.lock:
-            # Find the best device to connect to (trusted devices or configured MAC)
-            best_device = self._find_best_device_to_connect()
+        # Find best device OUTSIDE self.lock to avoid deadlock with _bluetoothctl_lock
+        best_device = self._find_best_device_to_connect()
 
+        with self.lock:
             if not best_device:
                 self.status = self.STATE_ERROR
                 self.message = "No trusted devices found - scan and pair a device first"
@@ -3368,13 +3410,13 @@ default-agent
             self.phone_mac = best_device[
                 "mac"
             ]  # Set phone_mac immediately so screen knows which device we're connecting to
+            # Reset failure counter on manual reconnect
+            self._reconnect_failure_count = 0
+            self._first_failure_time = None
 
         # Update cached UI status immediately so screen shows connecting state
         # Use current status - device may be paired/trusted from before
         self._update_cached_ui_status(mac=best_device["mac"])
-
-        # Reset failure counter on manual reconnect
-        self._reconnect_failure_count = 0
 
         # Unpause monitor since we have a device to monitor
         self._monitor_paused.clear()
@@ -3728,7 +3770,7 @@ default-agent
 
                 # Then clear flags so on_ui_update doesn't show connecting
                 with self.lock:
-                    self.status = self.STATE_CONNECTED
+                    self.status = self.STATE_DISCONNECTED
                     self.message = "Bluetooth connected but tethering failed. Enable tethering on phone."
                     self._connection_in_progress = False  # Clear connection flag
                     self._connection_start_time = None
@@ -3815,25 +3857,49 @@ default-agent
         if not self._check_bluetooth_responsive():
             logging.warning("[bt-tether] Bluetooth appears hung, restarting service...")
             try:
-                subprocess.run(
-                    ["pkill", "-9", "bluetoothctl"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=self.SUBPROCESS_TIMEOUT_MEDIUM,
-                )
+                # Kill bluetoothctl processes but preserve the pairing agent
+                agent_pid = self.agent_process.pid if self.agent_process and self.agent_process.poll() is None else None
+                if agent_pid:
+                    self._kill_bluetoothctl_except(agent_pid)
+                else:
+                    subprocess.run(
+                        ["pkill", "-9", "bluetoothctl"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=self.SUBPROCESS_TIMEOUT_MEDIUM,
+                    )
                 subprocess.run(
                     ["systemctl", "restart", "bluetooth"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=self.SUBPROCESS_TIMEOUT_STANDARD,  # Reduced timeout for RPi Zero W2
+                    timeout=self.SUBPROCESS_TIMEOUT_STANDARD,
                 )
-                time.sleep(self.OPERATION_MEDIUM_DELAY)  # Extra time on slow hardware
+                time.sleep(self.OPERATION_MEDIUM_DELAY)
                 self._log("INFO", "Bluetooth service restarted")
+                # Restart pairing agent since bluetooth service was restarted
+                self._start_pairing_agent()
                 return True
             except Exception as e:
                 self._log("ERROR", f"Failed to restart Bluetooth: {e}")
                 return False
         return True
+
+    def _kill_bluetoothctl_except(self, exclude_pid):
+        """Kill all bluetoothctl processes except the one with exclude_pid (the pairing agent)"""
+        try:
+            result = subprocess.run(
+                ["pgrep", "bluetoothctl"],
+                capture_output=True, text=True, timeout=2,
+            )
+            for line in result.stdout.strip().split("\n"):
+                pid_str = line.strip()
+                if pid_str and int(pid_str) != exclude_pid:
+                    try:
+                        os.kill(int(pid_str), 9)
+                    except ProcessLookupError:
+                        pass
+        except Exception:
+            pass
 
     def _run_cmd(self, cmd, capture=False, timeout=None):
         """Run shell command with error handling and deadlock prevention"""
@@ -3863,25 +3929,29 @@ default-agent
                         env=env,
                     )
                     return None
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as te:
                 logging.error(
                     f"[bt-tether] Command timeout ({timeout}s): {' '.join(cmd)}"
                 )
-                # Kill hung bluetoothctl after timeout (only if it's a bluetoothctl command)
+                # Kill hung bluetoothctl but preserve the persistent pairing agent
                 if cmd and cmd[0] == "bluetoothctl":
                     try:
-                        subprocess.run(
-                            ["pkill", "-9", "bluetoothctl"],
-                            stdout=subprocess.DEVNULL,
-                            stderr=subprocess.DEVNULL,
-                            timeout=2,
-                        )
+                        agent_pid = self.agent_process.pid if self.agent_process and self.agent_process.poll() is None else None
+                        if agent_pid:
+                            self._kill_bluetoothctl_except(agent_pid)
+                        else:
+                            subprocess.run(
+                                ["pkill", "-9", "bluetoothctl"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL,
+                                timeout=2,
+                            )
                         time.sleep(
                             self.PROCESS_CLEANUP_DELAY
                         )  # Brief pause to let process die
                     except Exception as e:
                         self._log("DEBUG", f"Process kill failed: {e}")
-                return "Timeout"
+                return None
             except Exception as e:
                 logging.error(f"[bt-tether] Command failed: {' '.join(cmd)}")
                 logging.error(f"[bt-tether] Exception: {e}")
