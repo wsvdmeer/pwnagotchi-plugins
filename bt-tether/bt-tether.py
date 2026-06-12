@@ -1379,6 +1379,38 @@ class BTTetherHelper(Plugin):
         )
         return False
 
+    def _wait_for_pan_interface(self, timeout=6):
+        """Poll until a PAN interface is active, returning its name (or None).
+
+        Replaces a fixed post-NAP sleep: the bnepX interface usually appears in
+        well under a second, so we proceed as soon as it does instead of waiting
+        out a worst-case guess.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._pan_active():
+                return self._get_pan_interface()
+            if self._cancel_connect.is_set() or self._monitor_stop.is_set():
+                return None
+            time.sleep(0.25)
+        return self._get_pan_interface() if self._pan_active() else None
+
+    def _wait_for_interface_ip(self, iface, timeout=8):
+        """Poll until the interface has an IPv4 address, returning it (or None).
+
+        Replaces fixed post-DHCP sleeps so internet verification starts the
+        moment the lease lands rather than after a fixed delay.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            ip = self._get_interface_ip(iface)
+            if ip:
+                return ip
+            if self._cancel_connect.is_set() or self._monitor_stop.is_set():
+                return None
+            time.sleep(0.3)
+        return self._get_interface_ip(iface)
+
     def _initialize_bluetooth_services(self):
         """Initialize Bluetooth services - called by either on_ready() or fallback"""
         with self.lock:
@@ -2366,20 +2398,19 @@ default-agent
             if nap_connected:
                 self._log("INFO", f"✓ Reconnection successful")
 
-                # Wait for PAN interface
-                time.sleep(self.PAN_INTERFACE_WAIT)
+                # Poll for the PAN interface instead of a fixed wait
+                iface = self._wait_for_pan_interface(timeout=6)
 
                 # Check if PAN interface is up
-                if self._pan_active():
-                    iface = self._get_pan_interface()
+                if iface:
                     self._log("INFO", f"✓ PAN interface active: {iface}")
 
                     # Setup network with DHCP
                     if self._setup_network_dhcp(iface):
                         self._log("INFO", f"✓ Network setup successful")
 
-                    # Verify internet connectivity
-                    time.sleep(self.INTERNET_VERIFY_WAIT)
+                    # Wait (poll) for the DHCP lease, then verify internet
+                    self._wait_for_interface_ip(iface, timeout=8)
                     if self._check_internet_connectivity():
                         self._log("INFO", f"✓ Internet connectivity verified!")
 
@@ -3889,9 +3920,10 @@ default-agent
                     iface = self._get_pan_interface()
                     self._log("INFO", f"✓ PAN interface active: {iface}")
 
-                    # Wait for interface initialization
-                    self._log("INFO", "Waiting for interface initialization...")
-                    time.sleep(2)
+                    # Brief settle before DHCP (the interface is already active;
+                    # _setup_network_dhcp also brings it up). Polling for the IP
+                    # afterwards is what we actually gate on.
+                    time.sleep(self.OPERATION_SHORT_DELAY)
 
                     # Setup network with DHCP
                     if self._setup_network_dhcp(iface):
@@ -3925,8 +3957,8 @@ default-agent
                             "Network setup failed, connection may not work",
                         )
 
-                    # Wait a bit for network to stabilize
-                    time.sleep(self.DEVICE_OPERATION_LONGER_DELAY)
+                    # Poll for the DHCP lease instead of a fixed stabilize delay
+                    self._wait_for_interface_ip(iface, timeout=8)
 
                     # Verify internet connectivity
                     self._log("INFO", "Checking internet connectivity...")
@@ -4345,9 +4377,21 @@ default-agent
                     timeout=5,
                 )
                 time.sleep(self.DHCP_RELEASE_WAIT)
+                # dhcpcd ARP-probes the address for ~5-6s (duplicate-address
+                # detection). That's pointless on a point-to-point Bluetooth PAN
+                # link, so disable it via a minimal config - it's the single
+                # biggest chunk of connect time.
+                dhcpcd_cf = "/tmp/bt-tether-dhcpcd.conf"
+                cf_args = []
+                try:
+                    with open(dhcpcd_cf, "w") as cf:
+                        cf.write("noarp\n")
+                    cf_args = ["-f", dhcpcd_cf]
+                except Exception as e:
+                    logging.debug(f"[bt-tether] dhcpcd cf write failed: {e}")
                 # Request new lease
                 result = subprocess.run(
-                    ["sudo", "dhcpcd", "-4", "-n", iface],
+                    ["sudo", "dhcpcd", "-4"] + cf_args + ["-n", iface],
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
@@ -4366,12 +4410,26 @@ default-agent
                 self._kill_dhclient_for_interface(iface)
                 time.sleep(self.DHCP_KILL_WAIT)
 
+                # dhclient's default initial DISCOVER backoff is a random delay of
+                # up to ~10s, which dominates lease time on a fast PAN link. A tiny
+                # config makes it retry quickly so the lease lands in ~1-2s.
+                dhclient_cf = "/tmp/bt-tether-dhclient.conf"
+                try:
+                    with open(dhclient_cf, "w") as cf:
+                        cf.write(
+                            "initial-interval 1;\nbackoff-cutoff 3;\ntimeout 25;\n"
+                        )
+                    cf_args = ["-cf", dhclient_cf]
+                except Exception as e:
+                    logging.debug(f"[bt-tether] dhclient cf write failed: {e}")
+                    cf_args = []
+
                 # Request new lease with better error handling.
                 # Run via Popen and poll so a mid-request disconnect/shutdown can
                 # abort promptly instead of blocking for the full 30s.
                 try:
                     proc = subprocess.Popen(
-                        ["sudo", "dhclient", "-4", "-v", iface],
+                        ["sudo", "dhclient", "-4", "-v"] + cf_args + [iface],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
