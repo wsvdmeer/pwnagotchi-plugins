@@ -84,6 +84,9 @@ detailed_status_position = [0, 82]  # Position for detailed status (default: [0,
 auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
 reconnect_interval = 60  # Check connection every N seconds (default: 60)
 reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (default: 300 = 5 minutes)
+
+# Connection Settings
+nap_connect_timeout = 20  # Max seconds to wait for a NAP connect before giving up (default: 20)
 ```
 
 ## Usage
@@ -96,11 +99,13 @@ The interface consists of the following sections:
 
 **Connection Status** — Main panel showing:
 
+- **Status banner**: A colour-coded, at-a-glance summary of the current state (Connected / Connecting / Reconnecting / Pairing / Ready / Auto-reconnect paused / No device), including the device name and, when connected, the interface and IP. While auto-reconnect is paused it shows a live retry countdown.
 - **Trusted Devices**: Lists paired devices with tethering capability
 - **Status Indicators**: Real-time Paired / Trusted / Connected / Internet status with checkmarks
 - **Active Connection**: Shows which network interface is handling internet traffic (Bluetooth, USB, Ethernet, Wi-Fi) with standby notifications when a higher-priority interface is active
 - **IP Address**: Displayed when connected with an active PAN interface
-- **Output Log**: Live scrolling log of plugin activity (pairing, connecting, errors)
+- **Pair another device**: Opens the scanner even when a device is already trusted, so you can pair a second/different phone
+- **Output Log**: Live scrolling log of plugin activity with All / Info / Warn / Err level filtering
 
 **Connect / Disconnect** — Action buttons:
 
