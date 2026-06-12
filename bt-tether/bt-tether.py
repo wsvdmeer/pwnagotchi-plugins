@@ -1200,6 +1200,10 @@ class BTTetherHelper(Plugin):
     SUBPROCESS_TIMEOUT_STANDARD = 5  # For main bluetoothctl operations
     SUBPROCESS_TIMEOUT_LONG = 10  # For long-running operations (device removal)
 
+    # Coalesce rapid web status polls (and multiple browser tabs) into at most
+    # one live read per this many seconds.
+    WEB_STATUS_CACHE_TTL = 2
+
     # UI polling intervals (milliseconds)
     UI_STATUS_POLL_INTERVAL = 2000  # Connection status check interval
     UI_LOG_POLL_INTERVAL = 5000  # Log refresh interval
@@ -1296,6 +1300,11 @@ class BTTetherHelper(Plugin):
         }
         self._cached_ui_status_lock = threading.Lock()
         self._ui_reference = None
+
+        # Short-TTL cache for the web /connection-status endpoint so frequent
+        # polling doesn't hit BlueZ/ip on every request.
+        self._web_status_cache = None
+        self._web_status_cache_time = 0
 
         self._initialization_done = threading.Event()
         self._fallback_thread = None
@@ -2879,7 +2888,19 @@ default-agent
             if clean_path == "connection-status":
                 mac = request.args.get("mac", "").strip().upper()
                 if mac and self._validate_mac(mac):
+                    # Serve a very recent read from cache to coalesce rapid polls
+                    now = time.time()
+                    cached = self._web_status_cache
+                    if (
+                        cached
+                        and cached.get("mac") == mac
+                        and now - self._web_status_cache_time
+                        < self.WEB_STATUS_CACHE_TTL
+                    ):
+                        return jsonify(cached["status"])
                     status = self._get_full_connection_status(mac)
+                    self._web_status_cache = {"mac": mac, "status": status}
+                    self._web_status_cache_time = now
                     return jsonify(status)
                 else:
                     return jsonify(
@@ -3164,8 +3185,58 @@ default-agent
             self._log("ERROR", f"Unpair error: {e}")
             return {"success": False, "message": f"Unpair failed: {str(e)}"}
 
+    def _dbus_all_devices(self):
+        """Return {MAC_UPPER: props} for all known BlueZ devices via D-Bus.
+
+        One GetManagedObjects call replaces spawning a bluetoothctl process per
+        device plus ANSI text parsing - much cheaper (matters on a slow ARMv6
+        Pi Zero) and more robust. Returns None if D-Bus is unavailable so callers
+        fall back to bluetoothctl. props: name, paired, trusted, connected, has_nap.
+        """
+        if not DBUS_AVAILABLE:
+            return None
+        try:
+            bus = dbus.SystemBus()
+            mgr = dbus.Interface(
+                bus.get_object("org.bluez", "/"),
+                "org.freedesktop.DBus.ObjectManager",
+            )
+            objects = mgr.GetManagedObjects()
+            nap = self.NAP_UUID.lower()
+            devices = {}
+            for _path, interfaces in objects.items():
+                dev = interfaces.get("org.bluez.Device1")
+                if not dev:
+                    continue
+                addr = str(dev.get("Address", "")).upper()
+                if not addr:
+                    continue
+                uuids = [str(u).lower() for u in dev.get("UUIDs", [])]
+                devices[addr] = {
+                    "name": str(dev.get("Alias") or dev.get("Name") or addr),
+                    "paired": bool(dev.get("Paired", False)),
+                    "trusted": bool(dev.get("Trusted", False)),
+                    "connected": bool(dev.get("Connected", False)),
+                    "has_nap": nap in uuids,
+                }
+            return devices
+        except Exception as e:
+            logging.debug(f"[bt-tether] D-Bus device read failed, will fall back: {e}")
+            return None
+
     def _check_pair_status(self, mac):
         """Check if a device is already paired"""
+        # Fast path: read device state straight from BlueZ over D-Bus
+        devices = self._dbus_all_devices()
+        if devices is not None:
+            d = devices.get(mac.upper())
+            if d is None:
+                return {"paired": False, "connected": False, "known_to_bluez": False}
+            return {
+                "paired": d["paired"],
+                "connected": d["connected"],
+                "known_to_bluez": True,
+            }
         try:
             info = self._run_cmd(["bluetoothctl", "info", mac], capture=True)
             if not info or "Device" not in info:
@@ -3249,7 +3320,29 @@ default-agent
             except Exception as pan_err:
                 logging.debug(f"[bt-tether] PAN check failed: {pan_err}")
 
-            # Quick bluetoothctl check with minimal timeout
+            # Device-level state via D-Bus (fast), falling back to bluetoothctl
+            devices = self._dbus_all_devices()
+            if devices is not None:
+                d = devices.get(mac.upper())
+                if d:
+                    return {
+                        "paired": d["paired"],
+                        "trusted": d["trusted"],
+                        "connected": d["connected"],
+                        "pan_active": False,  # Already checked above
+                        "interface": None,
+                        "ip_address": None,
+                    }
+                return {
+                    "paired": False,
+                    "trusted": False,
+                    "connected": False,
+                    "pan_active": False,
+                    "interface": None,
+                    "ip_address": None,
+                }
+
+            # Fallback: quick bluetoothctl check with minimal timeout
             try:
                 result = subprocess.run(
                     ["bluetoothctl", "info", mac],
@@ -3312,6 +3405,21 @@ default-agent
 
     def _get_trusted_devices(self):
         """Get list of all trusted Bluetooth devices with their info"""
+        # Fast path: read everything from BlueZ in one D-Bus call
+        devices = self._dbus_all_devices()
+        if devices is not None:
+            return [
+                {
+                    "mac": mac,
+                    "name": d["name"],
+                    "trusted": True,
+                    "paired": d["paired"],
+                    "connected": d["connected"],
+                    "has_nap": d["has_nap"],
+                }
+                for mac, d in devices.items()
+                if d["trusted"]
+            ]
         try:
             trusted_devices = []
 
@@ -4397,6 +4505,20 @@ default-agent
                     text=True,
                     timeout=20,
                 )
+                # If our noarp config made dhcpcd unhappy (unusual version), retry
+                # once with a plain invocation so we still get a lease anywhere.
+                if result.returncode != 0 and cf_args:
+                    self._log(
+                        "INFO",
+                        "dhcpcd config rejected - retrying without noarp tuning",
+                    )
+                    result = subprocess.run(
+                        ["sudo", "dhcpcd", "-4", "-n", iface],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=20,
+                    )
                 if result.stdout.strip():
                     self._log("INFO", f"dhcpcd: {result.stdout.strip()}")
                 if result.returncode == 0:
