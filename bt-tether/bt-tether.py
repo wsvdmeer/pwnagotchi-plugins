@@ -27,7 +27,7 @@ Configuration (config.toml):
     enabled = true
     auto_reconnect = true                    # Auto reconnect on disconnect (default: true)
     show_on_screen = true                    # Master switch: show status on display
-    show_mini_status = true                  # Show mini status indicator (C/N/P/D)
+    show_mini_status = true                  # Mini status glyph (UPPER=steady C/N/P/X, lower=busy)
     mini_status_position = [110, 0]          # Position for mini status
     show_detailed_status = true              # Show detailed status line with IP
     detailed_status_position = [0, 82]       # Position for detailed status line
@@ -152,7 +152,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       
       <!-- Output Section (shown above connect button) -->
       <div style="margin-bottom: 12px;">
-        <h4 style="margin: 0 0 8px 0; color: #8b949e; font-size: 14px;">📋 Output</h4>
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 0 0 8px 0; flex-wrap: wrap;">
+          <h4 style="margin: 0; color: #8b949e; font-size: 14px;">📋 Output</h4>
+          <div id="logFilter" style="display: flex; gap: 4px;">
+            <button class="logf" data-level="ALL" onclick="setLogFilter('ALL')" style="padding: 2px 8px; font-size: 11px; margin: 0; border-radius: 4px; background: #30363d; color: #e6edf3; border: none; cursor: pointer;">All</button>
+            <button class="logf" data-level="INFO" onclick="setLogFilter('INFO')" style="padding: 2px 8px; font-size: 11px; margin: 0; border-radius: 4px; background: transparent; color: #8b949e; border: none; cursor: pointer;">Info</button>
+            <button class="logf" data-level="WARNING" onclick="setLogFilter('WARNING')" style="padding: 2px 8px; font-size: 11px; margin: 0; border-radius: 4px; background: transparent; color: #8b949e; border: none; cursor: pointer;">Warn</button>
+            <button class="logf" data-level="ERROR" onclick="setLogFilter('ERROR')" style="padding: 2px 8px; font-size: 11px; margin: 0; border-radius: 4px; background: transparent; color: #8b949e; border: none; cursor: pointer;">Err</button>
+          </div>
+        </div>
         <div id="logViewer">
           <div style="background: #0d1117; color: #d4d4d4; padding: 12px; padding-right: 16px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 12px; max-height: 300px; overflow-y: auto; line-height: 1.5;" id="logContent">
             <div style="color: #888;">Fetching logs...</div>
@@ -372,8 +380,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         if (st === 'ERROR') {
           return setHero('⛔', 'Error', statusData.message || 'Something went wrong', '#f85149');
         }
-        if (statusData.message && statusData.message.toLowerCase().indexOf('paused') !== -1) {
-          return setHero('⏸️', 'Auto-reconnect paused', statusData.message, '#f85149');
+        if (statusData.reconnect_paused) {
+          const secs = statusData.cooldown_remaining || 0;
+          const when = secs > 0
+            ? `Retrying in ${secs >= 60 ? Math.ceil(secs / 60) + ' min' : secs + 's'}`
+            : 'Retrying shortly';
+          return setHero('⏸️', 'Auto-reconnect paused',
+            `${statusData.failure_count || 0} failed attempts · ${when} — or tap Connect`, '#f85149');
         }
         if (data.paired && data.trusted) {
           return setHero('🔗', 'Ready to connect' + (dev ? ' · ' + dev : ''),
@@ -1015,17 +1028,37 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         console.log(`[${type.toUpperCase()}] ${message}`);
       }
       
+      function setLogFilter(level) {
+        window._logFilter = level;
+        document.querySelectorAll('#logFilter .logf').forEach(b => {
+          const active = b.dataset.level === level;
+          b.style.background = active ? '#30363d' : 'transparent';
+          b.style.color = active ? '#e6edf3' : '#8b949e';
+        });
+        refreshLogs();
+      }
+
       async function refreshLogs() {
         try {
           const response = await fetch('/plugins/bt-tether/logs');
           const data = await response.json();
           const logContent = document.getElementById('logContent');
-          
+
           // Remember if user is at the bottom before updating
           const isAtBottom = logContent.scrollHeight - logContent.scrollTop <= logContent.clientHeight + 1;
-          
-          if (data.logs && data.logs.length > 0) {
-            logContent.innerHTML = data.logs.map(log => {
+
+          // Apply the active level filter. WARNING also includes ERROR; INFO
+          // includes everything except DEBUG noise.
+          const filter = window._logFilter || 'ALL';
+          let logs = data.logs || [];
+          if (filter !== 'ALL') {
+            const rank = { DEBUG: 0, INFO: 1, WARNING: 2, ERROR: 3 };
+            const min = rank[filter];
+            logs = logs.filter(l => (rank[(l.level || 'INFO').toUpperCase()] ?? 1) >= min);
+          }
+
+          if (logs.length > 0) {
+            logContent.innerHTML = logs.map(log => {
               const timestamp = log.timestamp || '';
               const level = (log.level || 'INFO').toUpperCase();
               const message = log.message || '';
@@ -1646,7 +1679,7 @@ class BTTetherHelper(Plugin):
                 LabeledValue(
                     color=BLACK,
                     label="BT",
-                    value="D",
+                    value="-",
                     position=pos,
                     label_font=fonts.Bold,
                     text_font=fonts.Medium,
@@ -1738,28 +1771,28 @@ class BTTetherHelper(Plugin):
 
             if initializing:
                 if self.show_mini_status:
-                    ui.set("bt-status", "I")
+                    ui.set("bt-status", "i")
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Initializing")
                 return
 
             if scanning:
                 if self.show_mini_status:
-                    ui.set("bt-status", "S")
+                    ui.set("bt-status", "s")
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Scanning")
                 return
 
             if disconnecting:
                 if self.show_mini_status:
-                    ui.set("bt-status", "D")
+                    ui.set("bt-status", "d")
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Disconnecting")
                 return
 
             if untrusting:
                 if self.show_mini_status:
-                    ui.set("bt-status", "T")
+                    ui.set("bt-status", "u")
                 if self.show_detailed_status:
                     ui.set("bt-detail", "BT:Untrusting")
                 return
@@ -1769,13 +1802,13 @@ class BTTetherHelper(Plugin):
                     pass
                 elif status_str == self.STATE_PAIRING:
                     if self.show_mini_status:
-                        ui.set("bt-status", "P")
+                        ui.set("bt-status", "p")
                     if self.show_detailed_status:
                         ui.set("bt-detail", "BT:Pairing")
                     return
                 elif status_str == self.STATE_TRUSTING:
                     if self.show_mini_status:
-                        ui.set("bt-status", "T")
+                        ui.set("bt-status", "t")
                     if self.show_detailed_status:
                         ui.set("bt-detail", "BT:Trusting")
                     return
@@ -1792,7 +1825,7 @@ class BTTetherHelper(Plugin):
                         pass
                     else:
                         if self.show_mini_status:
-                            ui.set("bt-status", "R")
+                            ui.set("bt-status", "r")
                         if self.show_detailed_status:
                             ui.set("bt-detail", "BT:Reconnecting")
                         return
@@ -1810,18 +1843,16 @@ class BTTetherHelper(Plugin):
                     ui.set("bt-detail", "BT:No device")
                 return
 
+            # Steady-state glyphs are UPPERCASE; transient actions above are
+            # lowercase so a glance distinguishes "settled" from "in progress".
             if cached_status.get("pan_active", False):
-                display = "C"
-            elif cached_status.get("connected", False) and cached_status.get(
-                "trusted", False
-            ):
-                display = "T"
+                display = "C"  # Connected, internet up
             elif cached_status.get("connected", False):
-                display = "N"
+                display = "N"  # Connected link, no internet yet
             elif cached_status.get("paired", False):
-                display = "P"
+                display = "P"  # Paired, not connected
             else:
-                display = "X"
+                display = "X"  # No device / disconnected
 
             if self.show_mini_status:
                 ui.set("bt-status", display)
@@ -2665,6 +2696,16 @@ default-agent
                     return jsonify({"success": False, "message": "Invalid MAC address"})
 
             if clean_path == "status":
+                # Surface auto-reconnect cooldown so the UI can show a countdown
+                paused = (
+                    self._reconnect_failure_count >= self._max_reconnect_failures
+                )
+                cooldown_remaining = 0
+                if paused and self._first_failure_time:
+                    elapsed = time.time() - self._first_failure_time
+                    cooldown_remaining = max(
+                        0, int(self._reconnect_failure_cooldown - elapsed)
+                    )
                 with self.lock:
                     return jsonify(
                         {
@@ -2675,6 +2716,9 @@ default-agent
                             "untrusting": self._untrusting,
                             "initializing": self._initializing,
                             "connection_in_progress": self._connection_in_progress,
+                            "reconnect_paused": paused,
+                            "cooldown_remaining": cooldown_remaining,
+                            "failure_count": self._reconnect_failure_count,
                         }
                     )
 

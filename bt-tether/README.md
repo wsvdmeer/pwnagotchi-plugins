@@ -126,21 +126,32 @@ The plugin provides two display modes that can be used independently or together
 
 **Mini Status (`show_mini_status`):**
 
-Single-letter indicator showing current state:
+Single-character indicator showing current state. The case tells you whether
+something is happening or settled: **lowercase = action in progress**,
+**UPPERCASE = steady state**.
 
-| Letter | State                 | Description                                  |
-| ------ | --------------------- | -------------------------------------------- |
-| **I**  | Initializing          | Plugin startup, Bluetooth service restarting |
-| **S**  | Scanning              | Device discovery in progress                 |
-| **P**  | Pairing               | Pairing with phone in progress               |
-| **T**  | Trusting / Untrusting | Trusting device or removing trust            |
-| **>**  | Connecting            | Connection in progress                       |
-| **R**  | Reconnecting          | Auto-reconnection attempt                    |
-| **C**  | Connected             | Connected with internet (PAN active)         |
-| **N**  | No internet           | Connected but PAN not active                 |
-| **D**  | Disconnecting         | Disconnect in progress                       |
-| **X**  | Disconnected          | No device or not connected                   |
-| **?**  | Error                 | Unknown state or error                       |
+_Transient (an action is running):_
+
+| Char  | State         | Description                                  |
+| ----- | ------------- | -------------------------------------------- |
+| **i** | Initializing  | Plugin startup, Bluetooth service restarting |
+| **s** | Scanning      | Device discovery in progress                 |
+| **p** | Pairing       | Pairing with phone in progress               |
+| **t** | Trusting      | Marking device trusted                       |
+| **u** | Untrusting    | Removing trust from device                   |
+| **>** | Connecting    | Connection in progress                       |
+| **r** | Reconnecting  | Auto-reconnection attempt                    |
+| **d** | Disconnecting | Disconnect in progress                       |
+
+_Steady (settled state):_
+
+| Char  | State        | Description                          |
+| ----- | ------------ | ------------------------------------ |
+| **C** | Connected    | Connected with internet (PAN active) |
+| **N** | No internet  | Connected link but no internet yet   |
+| **P** | Paired       | Paired but not connected             |
+| **X** | Disconnected | No device / not connected            |
+| **?** | Error        | Unknown state or error               |
 
 Position can be customized with `mini_status_position = [x, y]` (default: `[110, 0]`).
 
