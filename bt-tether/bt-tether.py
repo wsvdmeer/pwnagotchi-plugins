@@ -121,6 +121,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     <!-- Phone Connection & Status -->
     <div class="card" id="phoneConnectionCard">
       <h3 style="margin: 0 0 12px 0;">📱 Connection Status</h3>
+
+      <!-- Status hero: at-a-glance connection state -->
+      <div id="statusHero" style="display: flex; align-items: center; gap: 14px; padding: 16px; border-radius: 8px; margin-bottom: 12px; background: #161b22; border: 1px solid #30363d; border-left: 5px solid #6e7681; transition: all 0.2s;">
+        <div id="statusHeroIcon" style="font-size: 30px; line-height: 1;">🔌</div>
+        <div style="flex: 1; min-width: 0;">
+          <div id="statusHeroTitle" style="font-size: 17px; font-weight: 700; color: #e6edf3;">Loading…</div>
+          <div id="statusHeroSub" style="font-size: 13px; color: #8b949e; margin-top: 2px; overflow: hidden; text-overflow: ellipsis;">&nbsp;</div>
+        </div>
+      </div>
+
       <div id="trustedDevicesInfo" style="background: #0d1117; color: #d4d4d4; padding: 12px; border-radius: 4px; margin-bottom: 12px; font-family: 'Courier New', monospace; font-size: 12px; line-height: 1.5;">
         <div style="color: #888; margin-bottom: 4px;">Trusted Devices:</div>
         <div id="trustedDevicesSummary" style="color: #4ec9b0; font-size: 14px;">Loading...</div>
@@ -179,7 +189,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           🔌 Disconnect
         </button>
       </div>
-      
+
+      <!-- Pair-another-device toggle: lets you reach the scanner even when a
+           trusted device already exists (otherwise the scanner stays hidden). -->
+      <button class="outline" id="pairToggleBtn" onclick="togglePairing()" style="width: 100%; margin: 0 0 8px 0; display: none;">
+        ➕ Pair another device
+      </button>
+
       <!-- Device Discovery Section -->
       <div id="deviceDiscoverySection" style="display: none; margin-top: 16px; padding-top: 16px; border-top: 1px solid #30363d;">
         <h4 style="margin: 0 0 12px 0;">🔍 Discover Devices</h4>
@@ -311,6 +327,77 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         }
       }
       
+      function setHero(icon, title, sub, color) {
+        const hero = document.getElementById('statusHero');
+        if (!hero) return;
+        hero.style.borderLeftColor = color;
+        document.getElementById('statusHeroIcon').innerHTML = icon;
+        document.getElementById('statusHeroTitle').textContent = title;
+        document.getElementById('statusHeroSub').innerHTML = sub || '&nbsp;';
+      }
+
+      function updateStatusHero(statusData, data) {
+        const spinner = '<span class="spinner"></span>';
+        const st = statusData.status;
+        const dev = data.device_name || statusData.device || window._deviceName || '';
+        // Transient operations take priority over steady state.
+        if (statusData.disconnecting) {
+          return setHero(spinner, 'Disconnecting…', 'Tearing down the link', '#f0883e');
+        }
+        if (statusData.untrusting) {
+          return setHero(spinner, 'Removing trust…', '', '#f0883e');
+        }
+        if (st === 'PAIRING') {
+          return setHero(spinner, 'Pairing…', 'Confirm the passkey on your phone', '#d29922');
+        }
+        if (st === 'TRUSTING') {
+          return setHero(spinner, 'Trusting device…', '', '#d29922');
+        }
+        if (st === 'CONNECTING' || st === 'RECONNECTING' || statusData.connection_in_progress) {
+          return setHero(spinner, st === 'RECONNECTING' ? 'Reconnecting…' : 'Connecting…',
+            statusData.message || 'Establishing Bluetooth tethering', '#58a6ff');
+        }
+        // Steady states.
+        if (data.connected && data.pan_active) {
+          const bits = [];
+          if (data.interface) bits.push('via ' + data.interface);
+          if (data.ip_address) bits.push(data.ip_address);
+          return setHero('🌐', 'Connected' + (dev ? ' · ' + dev : ''),
+            'Internet active' + (bits.length ? ' — ' + bits.join(' · ') : ''), '#3fb950');
+        }
+        if (data.connected) {
+          return setHero('⚠️', 'Connected · no internet',
+            'Linked but no route out — enable Bluetooth tethering on your phone', '#d29922');
+        }
+        if (st === 'ERROR') {
+          return setHero('⛔', 'Error', statusData.message || 'Something went wrong', '#f85149');
+        }
+        if (statusData.message && statusData.message.toLowerCase().indexOf('paused') !== -1) {
+          return setHero('⏸️', 'Auto-reconnect paused', statusData.message, '#f85149');
+        }
+        if (data.paired && data.trusted) {
+          return setHero('🔗', 'Ready to connect' + (dev ? ' · ' + dev : ''),
+            'Paired & trusted — tap Connect', '#6e7681');
+        }
+        if (data.paired) {
+          return setHero('📎', 'Paired', dev || 'Device paired but not trusted', '#6e7681');
+        }
+        return setHero('🔌', 'No phone paired', 'Scan and pair your phone to begin', '#6e7681');
+      }
+
+      function togglePairing() {
+        window._showPairing = !window._showPairing;
+        const section = document.getElementById('deviceDiscoverySection');
+        const btn = document.getElementById('pairToggleBtn');
+        if (window._showPairing) {
+          section.style.display = 'block';
+          btn.innerHTML = '✕ Cancel pairing';
+        } else {
+          section.style.display = 'none';
+          btn.innerHTML = '➕ Pair another device';
+        }
+      }
+
       function updateStatusDisplay(statusData, data) {
         // Determine screen status letter (C/N/P/D)
         let screenStatus = 'D';
@@ -321,7 +408,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         } else if (data.paired) {
           screenStatus = 'P';  // Paired but not connected
         }
-        
+
+        // --- Status hero: one-glance state ---
+        updateStatusHero(statusData, data);
+
         document.getElementById("statusPaired").innerHTML = 
           `📱 Paired: <span style="color: ${data.paired ? '#4ec9b0' : '#f48771'};">${data.paired ? '✓ Yes' : '✗ No'}</span>`;
         
@@ -609,7 +699,11 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           
           const summaryDiv = document.getElementById('trustedDevicesSummary');
           const deviceDiscoverySection = document.getElementById('deviceDiscoverySection');
-          
+          const pairToggleBtn = document.getElementById('pairToggleBtn');
+          // The "pair another device" toggle is only relevant when idle with
+          // trusted devices present; hide by default and re-show below.
+          if (pairToggleBtn) pairToggleBtn.style.display = 'none';
+
           // Hide device discovery section during initialization, pairing, connecting, reconnecting, disconnecting, or untrusting
           const isConnecting = statusData.initializing || 
                                statusData.disconnecting ||
@@ -672,9 +766,15 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             const napDevices = data.devices.filter(d => d.has_nap);
             const connectedDevice = napDevices.find(d => d.connected);
             
-            // Hide device discovery section when trusted devices exist OR when connecting
-            deviceDiscoverySection.style.display = 'none';
-            
+            // Trusted devices exist: scanner stays hidden unless the user opened
+            // it via the toggle, which we surface here.
+            deviceDiscoverySection.style.display = window._showPairing ? 'block' : 'none';
+            if (pairToggleBtn) pairToggleBtn.style.display = isConnecting ? 'none' : 'block';
+
+            // Remember a friendly name for the status hero (status endpoints only expose MAC)
+            window._deviceName = (connectedDevice && connectedDevice.name)
+              || (napDevices[0] && napDevices[0].name) || window._deviceName;
+
             if (connectedDevice) {
               summaryDiv.innerHTML = `<span style="color: #3fb950;">🔵 Connected to ${connectedDevice.name}</span><br><small style="color: #888;">${connectedDevice.mac}</small>`;
             } else if (napDevices.length > 0) {
