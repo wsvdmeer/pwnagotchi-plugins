@@ -1148,6 +1148,10 @@ class BTTetherHelper(Plugin):
 
     # Timing constants
     BLUETOOTH_SERVICE_STARTUP_DELAY = 3
+    # `systemctl restart bluetooth` can legitimately take well over 5s on slow
+    # hardware (Pi Zero); give it room so it doesn't spuriously TimeoutExpired.
+    # The readiness poll afterwards is what actually gates on the adapter.
+    BLUETOOTH_RESTART_TIMEOUT = 25
     MONITOR_INITIAL_DELAY = 5
     MONITOR_PAUSED_CHECK_INTERVAL = 10  # Check every 10 seconds when paused
     SCAN_DURATION = 30
@@ -1399,9 +1403,16 @@ class BTTetherHelper(Plugin):
                     ["systemctl", "restart", "bluetooth"],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=self.SUBPROCESS_TIMEOUT_STANDARD,
+                    timeout=self.BLUETOOTH_RESTART_TIMEOUT,
                 )
                 self._log("INFO", "Bluetooth service restarted")
+            except subprocess.TimeoutExpired:
+                # Restart is still settling in the background; the readiness poll
+                # below will wait for the adapter, so this isn't fatal.
+                self._log(
+                    "INFO",
+                    "Bluetooth restart still settling; waiting for adapter...",
+                )
             except Exception as e:
                 self._log("WARNING", f"Failed to restart Bluetooth service: {e}")
 
@@ -4120,12 +4131,18 @@ default-agent
                     stderr=subprocess.DEVNULL,
                     timeout=self.SUBPROCESS_TIMEOUT_MEDIUM,
                 )
-                subprocess.run(
-                    ["systemctl", "restart", "bluetooth"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=self.SUBPROCESS_TIMEOUT_STANDARD,  # Reduced timeout for RPi Zero W2
-                )
+                try:
+                    subprocess.run(
+                        ["systemctl", "restart", "bluetooth"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=self.BLUETOOTH_RESTART_TIMEOUT,
+                    )
+                except subprocess.TimeoutExpired:
+                    self._log(
+                        "INFO",
+                        "Bluetooth restart still settling; waiting for adapter...",
+                    )
                 # Wait for the adapter to actually come back rather than a fixed
                 # delay that may be too short on slow hardware (observed ~8s).
                 self._wait_for_bluetooth_ready(timeout=self.SUBPROCESS_TIMEOUT_LONG)
