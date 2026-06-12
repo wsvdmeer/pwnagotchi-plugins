@@ -5252,6 +5252,23 @@ default-agent
         except Exception as e:
             self._log("WARNING", f"Failed to set device name: {e}")
 
+    def _abort_nap_link(self, mac):
+        """Tear down a half-open BT link after an abandoned NAP attempt.
+
+        When we give up on the wall-clock budget, BlueZ's underlying connect may
+        still be in flight. Disconnecting clears it so the next attempt starts
+        from a clean state instead of overlapping (which the phone refuses).
+        """
+        try:
+            self._run_cmd(
+                ["bluetoothctl", "disconnect", mac],
+                capture=True,
+                timeout=self.SUBPROCESS_TIMEOUT_STANDARD,
+            )
+            logging.debug(f"[bt-tether] Tore down half-open link to {mac}")
+        except Exception as e:
+            logging.debug(f"[bt-tether] NAP link teardown failed: {e}")
+
     def _connect_nap_dbus(self, mac, timeout=None):
         """Connect to NAP service using DBus directly.
 
@@ -5336,6 +5353,9 @@ default-agent
                         f"NAP connect exceeded {timeout}s budget - abandoning attempt "
                         f"(phone likely off or out of range)",
                     )
+                    # Tear down the half-open link so the abandoned ConnectProfile
+                    # doesn't linger and make the next attempt overlap / get refused.
+                    self._abort_nap_link(mac)
                     return False
 
             dbus_err = result["err"]
