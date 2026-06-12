@@ -811,9 +811,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
             resultHtml += `</div>`;
           }
           
-          // bnep0 IP
+          // PAN interface IP (bnep0 / bt-pan / ...)
+          const panIface = data.pan_interface || 'PAN';
           resultHtml += `<div style="margin-bottom: 8px;">`;
-          resultHtml += `<b>💻 bnep0 IP:</b> `;
+          resultHtml += `<b>💻 ${panIface} IP:</b> `;
           resultHtml += data.bnep0_ip ? `<span style="color: #28a745;">${data.bnep0_ip}</span>` : '<span style="color: #dc3545;">No IP assigned</span>';
           resultHtml += `</div>`;
           
@@ -1039,6 +1040,11 @@ class BTTetherHelper(Plugin):
     FALLBACK_INIT_TIMEOUT = 15  # Seconds to wait for on_ready() before fallback init
     PAN_INTERFACE_WAIT = 2  # Seconds to wait for PAN interface after connection
     INTERNET_VERIFY_WAIT = 2  # Seconds to wait before verifying internet connectivity
+    # Max seconds a single NAP ConnectProfile call may block before we abandon it.
+    # When the phone is off/out of range BlueZ can sit on the request until its own
+    # ~30s D-Bus timeout, freezing whatever thread called us. We bound it ourselves
+    # and stay responsive to shutdown / user-disconnect instead.
+    NAP_CONNECT_TIMEOUT = 20
     DHCP_KILL_WAIT = 0.5  # Wait after killing dhclient
     DHCP_RELEASE_WAIT = 1  # Wait after releasing DHCP lease
 
@@ -1100,6 +1106,20 @@ class BTTetherHelper(Plugin):
         self.reconnect_interval = self.options.get(
             "reconnect_interval", self.DEFAULT_RECONNECT_INTERVAL
         )
+        self.nap_connect_timeout = self.options.get(
+            "nap_connect_timeout", self.NAP_CONNECT_TIMEOUT
+        )
+
+        # Set when a connect/reconnect attempt in flight should give up early
+        # (user requested disconnect, or plugin is unloading). Checked by the
+        # bounded waits in _connect_nap_dbus / DHCP so we never block teardown.
+        self._cancel_connect = threading.Event()
+
+        # True when the last NAP attempt was abandoned on our wall-clock budget
+        # (vs a clean BlueZ error). The underlying BlueZ request keeps the adapter
+        # busy for a few more seconds, so immediate in-thread retries are useless -
+        # callers use this to stop retrying now and let the monitor try next cycle.
+        self._nap_attempt_abandoned = False
 
         self._bluetoothctl_lock = threading.Lock()
 
@@ -1169,6 +1189,59 @@ class BTTetherHelper(Plugin):
             self._initialization_done.set()
             self._initialize_bluetooth_services()
 
+    def _wait_for_bluetooth_ready(self, timeout=10):
+        """Poll until bluetooth is genuinely ready instead of sleeping blindly.
+
+        Returns True once the systemd unit is active and a controller is present
+        (powering it on if needed), False on timeout. On slow hardware (e.g. a
+        Pi Zero) a fixed sleep can race the pairing agent against an adapter that
+        is not up yet; polling proceeds the moment BlueZ is actually ready
+        (usually well under a second) and waits longer only when it has to.
+        """
+        deadline = time.monotonic() + timeout
+        start = time.monotonic()
+        powered_on_attempted = False
+        last_reason = "unknown"
+        while time.monotonic() < deadline:
+            active = self._run_cmd(
+                ["systemctl", "is-active", "bluetooth"],
+                capture=True,
+                timeout=self.SUBPROCESS_TIMEOUT_NORMAL,
+            )
+            if active and active.strip() == "active":
+                show = self._run_cmd(
+                    ["bluetoothctl", "show"],
+                    capture=True,
+                    timeout=self.SUBPROCESS_TIMEOUT_NORMAL,
+                )
+                if show and show != "Timeout" and "Controller" in show:
+                    if "Powered: yes" in show:
+                        self._log(
+                            "INFO",
+                            f"Bluetooth ready after {time.monotonic() - start:.1f}s",
+                        )
+                        return True
+                    # Controller present but not powered - nudge it once, then keep polling
+                    if not powered_on_attempted:
+                        powered_on_attempted = True
+                        self._run_cmd(
+                            ["bluetoothctl", "power", "on"],
+                            capture=True,
+                            timeout=self.SUBPROCESS_TIMEOUT_NORMAL,
+                        )
+                    last_reason = "adapter present but not powered"
+                else:
+                    last_reason = "no controller yet"
+            else:
+                last_reason = f"service '{active}'"
+            time.sleep(0.5)
+
+        self._log(
+            "WARNING",
+            f"Bluetooth not fully ready after {timeout}s ({last_reason}) - continuing anyway",
+        )
+        return False
+
     def _initialize_bluetooth_services(self):
         """Initialize Bluetooth services - called by either on_ready() or fallback"""
         with self.lock:
@@ -1195,10 +1268,15 @@ class BTTetherHelper(Plugin):
                     stderr=subprocess.DEVNULL,
                     timeout=self.SUBPROCESS_TIMEOUT_STANDARD,
                 )
-                time.sleep(self.BLUETOOTH_SERVICE_STARTUP_DELAY)
                 self._log("INFO", "Bluetooth service restarted")
             except Exception as e:
                 self._log("WARNING", f"Failed to restart Bluetooth service: {e}")
+
+            # Wait for the adapter to actually be ready instead of a blind sleep,
+            # so the pairing agent below never races a not-yet-powered controller.
+            self._wait_for_bluetooth_ready(
+                timeout=self.SUBPROCESS_TIMEOUT_LONG
+            )
 
             # Verify localhost routing is intact (critical for bettercap API)
             try:
@@ -1323,8 +1401,12 @@ class BTTetherHelper(Plugin):
         try:
             self._log("INFO", "Unloading plugin, cleaning up resources...")
 
+            # Signal any in-flight connect/reconnect (and its bounded NAP/DHCP
+            # waits) plus the monitor loop to stop promptly so unload is quick.
+            self._cancel_connect.set()
+            self._monitor_stop.set()
+
             if self._monitor_thread and self._monitor_thread.is_alive():
-                self._monitor_stop.set()
                 self._monitor_thread.join(timeout=self.SUBPROCESS_TIMEOUT_STANDARD)
 
             if self.agent_process and self.agent_process.poll() is None:
@@ -1356,6 +1438,27 @@ class BTTetherHelper(Plugin):
                     os.remove(self.agent_log_path)
                 except Exception as e:
                     logging.debug(f"[bt-tether] Failed to remove agent log: {e}")
+
+            # Release DHCP lease / kill any dhclient we spawned for the PAN
+            # interface so it doesn't linger after the plugin is gone.
+            try:
+                with self._cached_ui_status_lock:
+                    iface = self._cached_ui_status.get("interface")
+                if iface:
+                    self._kill_dhclient_for_interface(iface)
+            except Exception as e:
+                logging.debug(f"[bt-tether] dhclient cleanup on unload failed: {e}")
+
+            # Reap any lingering bluetoothctl children (scan/monitor) we own.
+            try:
+                subprocess.run(
+                    ["pkill", "-9", "bluetoothctl"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=self.SUBPROCESS_TIMEOUT_MEDIUM,
+                )
+            except Exception as e:
+                logging.debug(f"[bt-tether] bluetoothctl cleanup on unload failed: {e}")
 
             self._log("INFO", "Plugin unloaded successfully")
         except Exception as e:
@@ -1799,7 +1902,10 @@ default-agent
         """Background loop to monitor connection status and reconnect if needed"""
         logging.info("[bt-tether] Connection monitor started")
 
-        time.sleep(self.MONITOR_INITIAL_DELAY)
+        # Interruptible initial delay so shutdown isn't blocked at startup
+        if self._monitor_stop.wait(self.MONITOR_INITIAL_DELAY):
+            logging.info("[bt-tether] Connection monitor stopped")
+            return
 
         while not self._monitor_stop.is_set():
             try:
@@ -1807,7 +1913,7 @@ default-agent
                     connection_in_progress = self._connection_in_progress
 
                 if connection_in_progress:
-                    time.sleep(self.reconnect_interval)
+                    self._monitor_stop.wait(self.reconnect_interval)
                     continue
 
                 best_device = self._find_best_device_to_connect(log_results=False)
@@ -1819,7 +1925,7 @@ default-agent
                         )
                         self._monitor_paused.set()
 
-                    time.sleep(self.reconnect_interval)
+                    self._monitor_stop.wait(self.reconnect_interval)
                     continue
 
                 current_mac = best_device["mac"]
@@ -1845,11 +1951,28 @@ default-agent
                 with self.lock:
                     user_requested_disconnect = self._user_requested_disconnect
 
+                confirmed_drop = False
                 if (
                     self._last_known_connected
                     and not status["connected"]
                     and not user_requested_disconnect
                 ):
+                    # Guard against a single transient bad read (e.g. a momentary
+                    # bluetoothctl timeout) flapping the link. Re-check once before
+                    # declaring a real drop and emitting a disconnect event.
+                    confirm = self._get_full_connection_status(current_mac)
+                    if confirm.get("connected"):
+                        self._log(
+                            "DEBUG",
+                            f"Transient disconnect read for {device_name} - still connected, ignoring",
+                        )
+                        status = confirm
+                        self._last_known_connected = True
+                        self._update_cached_ui_status(status=confirm, mac=current_mac)
+                    else:
+                        confirmed_drop = True
+
+                if confirmed_drop:
                     logging.warning(
                         f"[bt-tether] Connection to {device_name} dropped! Attempting to reconnect..."
                     )
@@ -1930,7 +2053,7 @@ default-agent
 
                     # Skip the rest of this iteration - we already handled reconnection
                     # Using stale `status` below would cause a double-reconnect attempt
-                    time.sleep(self.reconnect_interval)
+                    self._monitor_stop.wait(self.reconnect_interval)
                     continue
 
                 # Force screen refresh if connection state changed
@@ -2036,14 +2159,30 @@ default-agent
             except Exception as e:
                 logging.error(f"[bt-tether] Monitor loop error: {e}")
 
-            # Wait for next check
-            time.sleep(self.reconnect_interval)
+            # Wait for next check (interruptible so shutdown is prompt)
+            self._monitor_stop.wait(self.reconnect_interval)
 
         logging.info("[bt-tether] Connection monitor stopped")
+
+    def _resolve_device_name(self, mac):
+        """Resolve a friendly device name for a MAC, falling back to the MAC itself.
+
+        Used for event payloads so listeners (e.g. pwn-companion) receive a real
+        device name rather than the raw address.
+        """
+        try:
+            for d in self._get_trusted_devices():
+                if d.get("mac", "").upper() == mac.upper():
+                    return d.get("name") or mac
+        except Exception as e:
+            logging.debug(f"[bt-tether] Could not resolve name for {mac}: {e}")
+        return mac
 
     def _reconnect_device(self):
         """Attempt to reconnect to a previously paired device"""
         try:
+            # Fresh attempt: clear any stale cancel from a previous disconnect
+            self._cancel_connect.clear()
             # Find best device if no MAC is set
             if not self.phone_mac:
                 best_device = self._find_best_device_to_connect()
@@ -2110,7 +2249,7 @@ default-agent
                             "bt_tether_connected",
                             {
                                 "mac": mac,
-                                "device": mac,
+                                "device": self._resolve_device_name(mac),
                                 "ip": self._get_current_ip() or "unknown",
                                 "interface": iface,
                             },
@@ -2591,6 +2730,9 @@ default-agent
     def _disconnect_device(self, mac):
         """Disconnect from a Bluetooth device and remove trust to prevent auto-reconnect"""
         try:
+            # Abort any connect/reconnect currently in flight so its bounded
+            # NAP/DHCP waits return promptly instead of fighting the disconnect.
+            self._cancel_connect.set()
             # Set flags to stop auto-reconnect and indicate disconnecting state
             with self.lock:
                 self._user_requested_disconnect = True
@@ -3373,8 +3515,10 @@ default-agent
         # Use current status - device may be paired/trusted from before
         self._update_cached_ui_status(mac=best_device["mac"])
 
-        # Reset failure counter on manual reconnect
+        # Reset failure tracking on manual reconnect so a prior cooldown doesn't
+        # linger and the monitor treats this as a fresh start.
         self._reconnect_failure_count = 0
+        self._first_failure_time = None
 
         # Unpause monitor since we have a device to monitor
         self._monitor_paused.clear()
@@ -3387,6 +3531,8 @@ default-agent
     def _connect_thread(self, target_device):
         """Full automatic connection thread with pairing and connection logic"""
         try:
+            # Fresh attempt: clear any stale cancel from a previous disconnect
+            self._cancel_connect.clear()
             mac = target_device["mac"]
             device_name = target_device["name"]
             self._log("INFO", f"Starting connection to {device_name} ({mac})...")
@@ -3570,6 +3716,15 @@ default-agent
                     with self.lock:
                         self.message = f"NAP attempt {retry + 1}/3 failed..."
                         self._screen_needs_refresh = True
+                    # If we abandoned on our time budget, BlueZ is still busy with
+                    # the previous request - immediate retries only hit "busy".
+                    # Stop here; the monitor will retry on its next cycle.
+                    if self._nap_attempt_abandoned:
+                        self._log(
+                            "INFO",
+                            "Previous NAP request still settling - will retry later",
+                        )
+                        break
 
             if nap_connected:
                 self._log("INFO", "NAP connection successful!")
@@ -3827,7 +3982,9 @@ default-agent
                     stderr=subprocess.DEVNULL,
                     timeout=self.SUBPROCESS_TIMEOUT_STANDARD,  # Reduced timeout for RPi Zero W2
                 )
-                time.sleep(self.OPERATION_MEDIUM_DELAY)  # Extra time on slow hardware
+                # Wait for the adapter to actually come back rather than a fixed
+                # delay that may be too short on slow hardware (observed ~8s).
+                self._wait_for_bluetooth_ready(timeout=self.SUBPROCESS_TIMEOUT_LONG)
                 self._log("INFO", "Bluetooth service restarted")
                 return True
             except Exception as e:
@@ -3888,8 +4045,13 @@ default-agent
                 return None
 
     def _setup_network_dhcp(self, iface):
-        """Setup network for bnep0 interface using dhclient"""
+        """Setup network for the PAN interface using dhclient"""
         try:
+            # If a disconnect/shutdown arrived (e.g. during the NAP step), don't
+            # start a multi-second DHCP request we'd only tear down again.
+            if self._cancel_connect.is_set() or self._monitor_stop.is_set():
+                self._log("INFO", "Skipping DHCP - disconnect/shutdown requested")
+                return False
             self._log("INFO", f"Setting up network for {iface}...")
 
             # Ensure interface is up
@@ -4043,15 +4205,46 @@ default-agent
                 self._kill_dhclient_for_interface(iface)
                 time.sleep(self.DHCP_KILL_WAIT)
 
-                # Request new lease with better error handling
+                # Request new lease with better error handling.
+                # Run via Popen and poll so a mid-request disconnect/shutdown can
+                # abort promptly instead of blocking for the full 30s.
                 try:
-                    result = subprocess.run(
+                    proc = subprocess.Popen(
                         ["sudo", "dhclient", "-4", "-v", iface],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         text=True,
-                        timeout=30,
                     )
+                    cancelled = False
+                    dhcp_deadline = time.monotonic() + 30
+                    while True:
+                        try:
+                            out, err = proc.communicate(timeout=1)
+                            result = subprocess.CompletedProcess(
+                                proc.args, proc.returncode, out, err
+                            )
+                            break
+                        except subprocess.TimeoutExpired:
+                            if (
+                                self._cancel_connect.is_set()
+                                or self._monitor_stop.is_set()
+                            ):
+                                cancelled = True
+                                break
+                            if time.monotonic() >= dhcp_deadline:
+                                raise  # hand off to the 30s-timeout handler below
+
+                    if cancelled:
+                        self._log(
+                            "INFO", "dhclient aborted - disconnect/shutdown requested"
+                        )
+                        try:
+                            proc.terminate()
+                        except Exception:
+                            pass
+                        self._kill_dhclient_for_interface(iface)
+                        return False
+
                     combined = f"{result.stdout} {result.stderr}".strip()
 
                     # Check for common error messages
@@ -4413,7 +4606,8 @@ default-agent
             result = {
                 "ping_success": False,
                 "dns_success": False,
-                "bnep0_ip": None,
+                "pan_interface": None,
+                "bnep0_ip": None,  # kept for backward compat; holds the PAN iface IP
                 "default_route": None,
                 "dns_servers": None,
                 "dns_error": None,
@@ -4468,23 +4662,15 @@ default-agent
                 result["dns_servers"] = f"Error: {str(e)[:50]}"
                 logging.warning(f"[bt-tether] Get DNS servers error: {e}")
 
-            # Get bnep0 IP address
+            # Get the active PAN interface IP (bnep0 / bnep1 / bt-pan / ...)
             try:
-                ip_result = subprocess.run(
-                    ["ip", "addr", "show", "bnep0"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=5,
-                )
-                if ip_result.returncode == 0:
-
-                    ip_match = re.search(r"inet (\d+\.\d+\.\d+\.\d+)", ip_result.stdout)
-                    if ip_match:
-                        result["bnep0_ip"] = ip_match.group(1)
-                logging.info(f"[bt-tether] bnep0 IP: {result['bnep0_ip']}")
+                pan_iface = self._get_pan_interface() or "bnep0"
+                result["pan_interface"] = pan_iface
+                pan_ip = self._get_interface_ip(pan_iface)
+                result["bnep0_ip"] = pan_ip  # key kept for backward compat
+                logging.info(f"[bt-tether] PAN IP ({pan_iface}): {pan_ip}")
             except Exception as e:
-                logging.warning(f"[bt-tether] Get bnep0 IP error: {e}")
+                logging.warning(f"[bt-tether] Get PAN IP error: {e}")
 
             # Get default route
             try:
@@ -4905,8 +5091,17 @@ default-agent
         except Exception as e:
             self._log("WARNING", f"Failed to set device name: {e}")
 
-    def _connect_nap_dbus(self, mac):
-        """Connect to NAP service using DBus directly"""
+    def _connect_nap_dbus(self, mac, timeout=None):
+        """Connect to NAP service using DBus directly.
+
+        The ConnectProfile call is run in a worker thread and waited on with a
+        bounded, cancellable wall-clock budget so a phone that is off/out of
+        range can never freeze the caller (monitor or connect thread) for the
+        full ~30s BlueZ D-Bus timeout.
+        """
+        if timeout is None:
+            timeout = self.nap_connect_timeout
+        self._nap_attempt_abandoned = False
         try:
             if not DBUS_AVAILABLE:
                 logging.error("[bt-tether] dbus module not available")
@@ -4945,14 +5140,55 @@ default-agent
                 bus.get_object("org.bluez", device_path), "org.bluez.Device1"
             )
 
-            # Set a timeout for the ConnectProfile call to prevent hanging
-            try:
-                device.ConnectProfile(self.NAP_UUID, timeout=30)
+            # Run ConnectProfile in a worker thread so we can bound the wall-clock
+            # wait ourselves and stay responsive to shutdown / user-disconnect.
+            result = {"err": None, "done": False}
+
+            def _do_connect_profile():
+                try:
+                    # Give BlueZ slightly longer than our budget so our own wait,
+                    # not the D-Bus layer, is normally what bounds the attempt.
+                    device.ConnectProfile(self.NAP_UUID, timeout=timeout + 5)
+                except BaseException as e:  # noqa: BLE001 - capture for caller
+                    result["err"] = e
+                finally:
+                    result["done"] = True
+
+            worker = threading.Thread(target=_do_connect_profile, daemon=True)
+            worker.start()
+
+            deadline = time.monotonic() + timeout
+            while not result["done"]:
+                worker.join(0.5)
+                if result["done"]:
+                    break
+                if self._cancel_connect.is_set() or self._monitor_stop.is_set():
+                    self._log(
+                        "INFO",
+                        "NAP connect aborted (disconnect/shutdown requested)",
+                    )
+                    return False
+                if time.monotonic() >= deadline:
+                    self._nap_attempt_abandoned = True
+                    self._log(
+                        "WARNING",
+                        f"NAP connect exceeded {timeout}s budget - abandoning attempt "
+                        f"(phone likely off or out of range)",
+                    )
+                    return False
+
+            dbus_err = result["err"]
+            if dbus_err is None:
                 logging.info(
                     f"[bt-tether] ✓ NAP profile connected successfully via DBus"
                 )
                 return True
-            except dbus.exceptions.DBusException as dbus_err:
+
+            # Re-raise non-DBus errors to the outer handler
+            if not isinstance(dbus_err, dbus.exceptions.DBusException):
+                raise dbus_err
+
+            try:
                 error_msg = str(dbus_err)
                 logging.error(f"[bt-tether] DBus NAP connection failed: {dbus_err}")
 
@@ -5027,6 +5263,11 @@ default-agent
                         "⚠️  Bluetooth connection is busy, wait a moment and try again",
                     )
 
+                return False
+            except Exception as parse_err:
+                logging.error(
+                    f"[bt-tether] Error while classifying NAP failure: {parse_err}"
+                )
                 return False
 
         except ImportError as e:
