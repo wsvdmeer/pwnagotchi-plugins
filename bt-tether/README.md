@@ -185,6 +185,7 @@ Full status line at a configurable position:
 | **BT:Untrusting...**    | Removing trust from device        |
 | **BT:Disconnected**     | Not connected                     |
 | **BT:No device**        | No paired device found            |
+| **BT:Tether off?**      | Phone refused — enable Bluetooth tethering on the phone |
 | **BT:Error**            | Error or unknown state            |
 
 Position can be customized with `detailed_status_position = [x, y]` (default: `[0, 82]`).
