@@ -1174,7 +1174,11 @@ class BTTetherHelper(Plugin):
     PROCESS_CLEANUP_DELAY = 0.2
     DBUS_OPERATION_RETRY_DELAY = 0.1
     AGENT_LOG_MONITOR_TIMEOUT = 90  # Seconds to monitor agent log for passkey
-    FALLBACK_INIT_TIMEOUT = 15  # Seconds to wait for on_ready() before fallback init
+    # Seconds to wait for on_ready() before initializing anyway. on_ready often
+    # arrives late (or after a slow boot), so a long wait just prolongs the
+    # "Initializing" state. Init is idempotent and does its own adapter-readiness
+    # poll, so starting early via fallback is safe.
+    FALLBACK_INIT_TIMEOUT = 5
     PAN_INTERFACE_WAIT = 2  # Seconds to wait for PAN interface after connection
     INTERNET_VERIFY_WAIT = 2  # Seconds to wait before verifying internet connectivity
     # Max seconds a single NAP ConnectProfile call may block before we abandon it.
@@ -4023,9 +4027,13 @@ default-agent
             if nap_connected:
                 self._log("INFO", "NAP connection successful!")
 
+                # Poll for the PAN interface: the kernel creates bnepX a short
+                # moment after NAP connects, so a single immediate check races it
+                # and can wrongly report "no interface detected".
+                iface = self._wait_for_pan_interface(timeout=6)
+
                 # Check if PAN interface is up
-                if self._pan_active():
-                    iface = self._get_pan_interface()
+                if iface:
                     self._log("INFO", f"✓ PAN interface active: {iface}")
 
                     # Brief settle before DHCP (the interface is already active;
