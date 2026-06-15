@@ -2,6 +2,21 @@
 
 All notable changes to the **bt-tether** plugin are documented here.
 
+## [1.4.0] - 2026-06-15
+
+### Added
+- **Dual-stack (IPv4 + IPv6) connectivity.** Some Android Bluetooth tethering
+  setups provide **IPv6-only** connectivity on the PAN side (no IPv4, address via
+  SLAAC) — a v4-only check falsely reported "no internet". The plugin now detects
+  a global IPv6 on the PAN interface and verifies connectivity over IPv6
+  (`ping -6 2001:4860:4860::8888`) when IPv4 is absent or fails. `pan_active`,
+  the address poll, the on-screen/web status and the `/test-internet` diagnostics
+  are all IPv6-aware, and the `bt_tether_connected` event gains an additive
+  `ipv6` field (the existing `ip` field stays IPv4 for back-compat).
+  - Ported from the unmerged **PR #1 by HugeFrog24** ("Add Telegram notifications
+    and IPv6 support"), adapted to the current code. Thanks @HugeFrog24.
+  - DHCP stays IPv4 (`-4`); IPv6 needs no DHCP client (SLAAC).
+
 ## [1.3.0] - 2026-06-15
 
 Reliability, speed and interface overhaul. No new dependencies (standard library

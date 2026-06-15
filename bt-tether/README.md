@@ -1,4 +1,4 @@
-# bt-tether (v1.3.0)
+# bt-tether (v1.4.0)
 
 > **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
 >
@@ -31,6 +31,7 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 - **Fast connect**: Connects in a few seconds — bounded NAP timeout, adapter-readiness polling, and skipping the pointless DHCP ARP probe on the PAN link (tunable via `fast_dhcp`)
 - **Self-healing**: Recovers from stuck Bluetooth states automatically (e.g. restarts the BT service after repeated "connection busy" errors) and never freezes the loop on an unresponsive phone
 - **Clear status**: Distinguishes settled vs in-progress states on the e-ink screen and a colour-coded web banner — including an explicit prompt when the phone's Bluetooth tethering is turned off
+- **Dual-stack (IPv4 + IPv6)**: Verifies connectivity over IPv4 or IPv6. Some Android devices provide IPv6-only connectivity over Bluetooth tethering (no IPv4 on the PAN side); this is detected and handled automatically
 - **Status Display**: Real-time connection status on Pwnagotchi's e-ink screen (mini + detailed)
 - **PAN (Personal Area Network) Support**: Automatic network interface and DHCP configuration
 - **Plugin Event System**: Emits `bt_tether_connected` and `bt_tether_disconnected` events that other plugins can listen to for custom integrations (see [Related Plugins](#related-plugins))
@@ -353,7 +354,8 @@ Use these plugins as reference implementations when building your own custom int
 
 - Enable Bluetooth tethering in your phone's settings
 - Check that your phone has an active internet connection (mobile data or WiFi)
-- Use the **"Test Internet Connectivity"** button in the web interface to diagnose the issue
+- Use the **"Test Internet Connectivity"** button in the web interface to diagnose the issue (it shows both the IPv4 and, if present, the IPv6 address)
+- IPv6-only tethering is supported: if the phone provides no IPv4 on the PAN side, connectivity is verified over IPv6 instead — the Test panel will show the IPv6 address and no IPv4
 - Check if USB is connected — USB takes priority over Bluetooth (see Active Connection in web UI)
 - Try disconnecting and reconnecting
 

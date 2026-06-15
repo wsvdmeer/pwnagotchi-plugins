@@ -932,9 +932,16 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           const panIface = data.pan_interface || 'PAN';
           resultHtml += `<div style="margin-bottom: 8px;">`;
           resultHtml += `<b>💻 ${panIface} IP:</b> `;
-          resultHtml += data.bnep0_ip ? `<span style="color: #28a745;">${data.bnep0_ip}</span>` : '<span style="color: #dc3545;">No IP assigned</span>';
+          resultHtml += data.bnep0_ip ? `<span style="color: #28a745;">${data.bnep0_ip}</span>` : '<span style="color: #dc3545;">No IPv4 assigned</span>';
           resultHtml += `</div>`;
-          
+
+          // IPv6 (shown when present - e.g. IPv6-only tethering)
+          if (data.ipv6) {
+            resultHtml += `<div style="margin-bottom: 8px;">`;
+            resultHtml += `<b>🌐 ${panIface} IPv6:</b> <span style="color: #28a745;">${data.ipv6}</span>`;
+            resultHtml += `</div>`;
+          }
+
           // Default route
           resultHtml += `<div style="margin-bottom: 8px;">`;
           resultHtml += `<b>🚦 Default Route:</b> `;
@@ -1129,7 +1136,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.3.0"
+    __version__ = "1.4.0"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1427,20 +1434,22 @@ class BTTetherHelper(Plugin):
         return self._get_pan_interface() if self._pan_active() else None
 
     def _wait_for_interface_ip(self, iface, timeout=8):
-        """Poll until the interface has an IPv4 address, returning it (or None).
+        """Poll until the interface has an IPv4 OR global IPv6 address.
 
-        Replaces fixed post-DHCP sleeps so internet verification starts the
-        moment the lease lands rather than after a fixed delay.
+        Returns the address (or None). Replaces fixed post-DHCP sleeps so
+        verification starts the moment an address lands. Accepting IPv6 means an
+        IPv6-only PAN link (SLAAC, no IPv4 lease) returns promptly instead of
+        dead-waiting the full timeout for an IPv4 that never arrives.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            ip = self._get_interface_ip(iface)
+            ip = self._get_interface_ip(iface) or self._get_global_ipv6(iface)
             if ip:
                 return ip
             if self._cancel_connect.is_set() or self._monitor_stop.is_set():
                 return None
             time.sleep(0.3)
-        return self._get_interface_ip(iface)
+        return self._get_interface_ip(iface) or self._get_global_ipv6(iface)
 
     def _initialize_bluetooth_services(self):
         """Initialize Bluetooth services - called by either on_ready() or fallback"""
@@ -2468,6 +2477,7 @@ default-agent
                                 "mac": mac,
                                 "device": self._resolve_device_name(mac),
                                 "ip": self._get_current_ip() or "unknown",
+                                "ipv6": self._get_global_ipv6(iface),
                                 "interface": iface,
                             },
                         )
@@ -3324,11 +3334,8 @@ default-agent
                                 text=True,
                                 timeout=self.SUBPROCESS_TIMEOUT_MEDIUM,
                             )
-                            if (
-                                ip_result.returncode == 0
-                                and "inet " in ip_result.stdout
-                            ):
-                                # Extract IP address from the output
+                            if ip_result.returncode == 0:
+                                # Extract an IPv4 address if present
                                 ip_address = None
                                 for line in ip_result.stdout.split("\n"):
                                     if "inet " in line and not "127.0.0.1" in line:
@@ -3342,15 +3349,20 @@ default-agent
                                         if ip_address:
                                             break
 
-                                # PAN interface exists and has IP, we're connected with internet
-                                return {
-                                    "paired": True,
-                                    "trusted": True,
-                                    "connected": True,
-                                    "pan_active": True,
-                                    "interface": pan_iface,
-                                    "ip_address": ip_address,
-                                }
+                                # Fall back to a global IPv6 (IPv6-only PAN via SLAAC)
+                                if not ip_address:
+                                    ip_address = self._get_global_ipv6(pan_iface)
+
+                                # PAN interface up with a usable address -> connected
+                                if ip_address:
+                                    return {
+                                        "paired": True,
+                                        "trusted": True,
+                                        "connected": True,
+                                        "pan_active": True,
+                                        "interface": pan_iface,
+                                        "ip_address": ip_address,
+                                    }
                         except Exception as ip_err:
                             logging.debug(f"[bt-tether] IP check failed: {ip_err}")
             except Exception as pan_err:
@@ -4150,6 +4162,7 @@ default-agent
                                 "mac": mac,
                                 "device": device_name,
                                 "ip": self._get_current_ip() or "unknown",
+                                "ipv6": self._get_global_ipv6(iface),
                                 "interface": iface,
                             },
                         )
@@ -4745,13 +4758,21 @@ default-agent
                     if ip_match:
                         ip_addr = ip_match.group(1)
                         if not ip_addr.startswith("169.254."):
-                            self._log("INFO", f"✓ {iface} got IP: {ip_addr}")
+                            self._log("INFO", f"✓ {iface} got IPv4: {ip_addr}")
                             break
                         else:
                             self._log(
                                 "DEBUG", f"Link-local IP {ip_addr}, waiting for DHCP..."
                             )
                             ip_addr = None
+                    # No usable IPv4 yet - accept a global IPv6 (IPv6-only PAN via
+                    # SLAAC needs no DHCP lease) so we don't dead-wait for IPv4.
+                    if not ip_addr:
+                        v6 = self._get_global_ipv6(iface)
+                        if v6:
+                            ip_addr = v6
+                            self._log("INFO", f"✓ {iface} got IPv6: {v6}")
+                            break
 
                 if attempt < max_checks - 1:
                     self._log("DEBUG", f"Waiting for IP... ({(attempt+1)*2}s)")
@@ -4822,12 +4843,18 @@ default-agent
             logging.error(f"[bt-tether] Localhost route verification failed: {e}")
 
     def _check_internet_connectivity(self):
-        """Check if internet is accessible via Bluetooth interface specifically"""
+        """Check internet via the Bluetooth interface (IPv4 or IPv6).
+
+        Dual-stack: some Android tethering setups provide IPv6-only connectivity
+        on the PAN side (no IPv4), so a v4-only check would falsely report "no
+        internet". Tries IPv4 first when present, then falls back to IPv6.
+        (IPv6 path ported from PR #1 by HugeFrog24.)
+        """
         try:
             # Get the BT interface
             bt_iface = self._get_pan_interface() or "bnep0"
 
-            # First verify bnep0 has an IP - if not, no point testing connectivity
+            # Verify the interface has any usable address (IPv4 or global IPv6)
             ip_result = subprocess.run(
                 ["ip", "addr", "show", bt_iface],
                 stdout=subprocess.PIPE,
@@ -4840,13 +4867,21 @@ default-agent
                 logging.warning(f"[bt-tether] {bt_iface} interface not found")
                 return False
 
-            ip_match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", ip_result.stdout)
-            if not ip_match or ip_match.group(1).startswith("169.254."):
-                logging.warning(f"[bt-tether] {bt_iface} has no valid IP")
-                return False
+            ipv4_match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", ip_result.stdout)
+            has_ipv4 = bool(ipv4_match) and not ipv4_match.group(1).startswith(
+                "169.254."
+            )
+            ipv6 = self._get_global_ipv6(bt_iface)
 
-            bt_ip = ip_match.group(1)
-            logging.info(f"[bt-tether] {bt_iface} has IP: {bt_ip}")
+            if not has_ipv4 and not ipv6:
+                logging.warning(
+                    f"[bt-tether] {bt_iface} has no valid IP (IPv4 or IPv6)"
+                )
+                return False
+            if has_ipv4:
+                logging.info(f"[bt-tether] {bt_iface} has IPv4: {ipv4_match.group(1)}")
+            if ipv6:
+                logging.info(f"[bt-tether] {bt_iface} has IPv6: {ipv6}")
 
             # Log current routing table for diagnostics
             route_check = subprocess.run(
@@ -4859,27 +4894,25 @@ default-agent
             if route_check.returncode == 0:
                 logging.info(f"[bt-tether] Current routes:\n{route_check.stdout}")
 
-            # Ping via the Bluetooth interface specifically
-            logging.info(
-                f"[bt-tether] Testing connectivity to 8.8.8.8 via {bt_iface}..."
-            )
-            result = subprocess.run(
-                ["ping", "-c", "2", "-W", "3", "-I", bt_iface, "8.8.8.8"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                timeout=10,
-            )
+            # Try IPv4 connectivity first (when an IPv4 address is present)
+            if has_ipv4:
+                logging.info(
+                    f"[bt-tether] Testing IPv4 connectivity to 8.8.8.8 via {bt_iface}..."
+                )
+                result = subprocess.run(
+                    ["ping", "-c", "2", "-W", "3", "-I", bt_iface, "8.8.8.8"],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0:
+                    logging.info(f"[bt-tether] ✓ IPv4 ping to 8.8.8.8 successful")
+                    return True
 
-            if result.returncode == 0:
-                logging.info(f"[bt-tether] ✓ Ping to 8.8.8.8 successful")
-                return True
-            else:
-                logging.warning(f"[bt-tether] Ping to 8.8.8.8 failed")
-                logging.warning(f"[bt-tether] Ping stderr: {result.stderr}")
-                logging.warning(f"[bt-tether] Ping stdout: {result.stdout}")
-
-                # Try to ping the gateway to see if that works
+                logging.warning(f"[bt-tether] IPv4 ping to 8.8.8.8 failed")
+                logging.debug(f"[bt-tether] Ping stderr: {result.stderr}")
+                # Gateway diagnostic to distinguish link vs internet issues
                 gateway_check = subprocess.run(
                     ["ip", "route", "show", "default"],
                     stdout=subprocess.PIPE,
@@ -4888,13 +4921,9 @@ default-agent
                     timeout=5,
                 )
                 if gateway_check.returncode == 0 and gateway_check.stdout:
-
                     match = re.search(r"default via ([\d.]+)", gateway_check.stdout)
                     if match:
                         gateway = match.group(1)
-                        logging.info(
-                            f"[bt-tether] Testing connectivity to gateway {gateway}..."
-                        )
                         gw_result = subprocess.run(
                             ["ping", "-c", "2", "-W", "3", gateway],
                             stdout=subprocess.PIPE,
@@ -4911,7 +4940,30 @@ default-agent
                                 f"[bt-tether] Gateway ping also failed - phone may not be providing internet"
                             )
 
-                return False
+            # Fall back to IPv6 if IPv4 was absent or its ping failed
+            if ipv6:
+                logging.info(
+                    f"[bt-tether] Testing IPv6 connectivity via {bt_iface}..."
+                )
+                # Literal target (Google public DNS v6) - avoids depending on
+                # working IPv6 DNS, mirroring the IPv4 use of a literal.
+                v6_result = subprocess.run(
+                    [
+                        "ping", "-6", "-c", "2", "-W", "3",
+                        "-I", bt_iface, "2001:4860:4860::8888",
+                    ],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=10,
+                )
+                if v6_result.returncode == 0:
+                    logging.info(f"[bt-tether] ✓ IPv6 connectivity verified")
+                    return True
+                logging.warning(f"[bt-tether] IPv6 ping failed")
+                logging.debug(f"[bt-tether] IPv6 ping stderr: {v6_result.stderr}")
+
+            return False
         except subprocess.TimeoutExpired:
             logging.warning(f"[bt-tether] Ping timeout - no internet connectivity")
             return False
@@ -4991,14 +5043,15 @@ default-agent
                 "ping_success": False,
                 "dns_success": False,
                 "pan_interface": None,
-                "bnep0_ip": None,  # kept for backward compat; holds the PAN iface IP
+                "bnep0_ip": None,  # kept for backward compat; holds the PAN iface IPv4
+                "ipv6": None,  # global IPv6 on the PAN interface, if any
                 "default_route": None,
                 "dns_servers": None,
                 "dns_error": None,
                 "localhost_routes": None,
             }
 
-            # Test ping to 8.8.8.8
+            # Test ping to 8.8.8.8 (IPv4), then fall back to IPv6 if that fails
             try:
                 ping_result = subprocess.run(
                     ["ping", "-c", "2", "-W", "3", "8.8.8.8"],
@@ -5007,6 +5060,15 @@ default-agent
                     timeout=5,
                 )
                 result["ping_success"] = ping_result.returncode == 0
+                if not result["ping_success"]:
+                    v6_ping = subprocess.run(
+                        ["ping", "-6", "-c", "2", "-W", "3", "2001:4860:4860::8888"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=5,
+                    )
+                    if v6_ping.returncode == 0:
+                        result["ping_success"] = True
                 logging.info(
                     f"[bt-tether] Ping test: {'Success' if result['ping_success'] else 'Failed'}"
                 )
@@ -5052,7 +5114,10 @@ default-agent
                 result["pan_interface"] = pan_iface
                 pan_ip = self._get_interface_ip(pan_iface)
                 result["bnep0_ip"] = pan_ip  # key kept for backward compat
-                logging.info(f"[bt-tether] PAN IP ({pan_iface}): {pan_ip}")
+                result["ipv6"] = self._get_global_ipv6(pan_iface)
+                logging.info(
+                    f"[bt-tether] PAN IP ({pan_iface}): v4={pan_ip} v6={result['ipv6']}"
+                )
             except Exception as e:
                 logging.warning(f"[bt-tether] Get PAN IP error: {e}")
 
@@ -5134,7 +5199,7 @@ default-agent
             return None
 
     def _get_interface_ip(self, iface):
-        """Get IP address of a network interface"""
+        """Get the IPv4 address of a network interface (None if none)."""
         try:
 
             result = subprocess.check_output(
@@ -5147,6 +5212,32 @@ default-agent
             return None
         except Exception as e:
             logging.debug(f"[bt-tether] Failed to get IP for {iface}: {e}")
+            return None
+
+    def _get_global_ipv6(self, iface=None):
+        """Get a global (non-link-local) IPv6 address from the PAN interface.
+
+        Some Android Bluetooth tethering setups provide IPv6-only connectivity
+        (no IPv4 on the PAN side, address via SLAAC). `scope global` excludes
+        fe80:: link-local automatically. Returns the address or None.
+        Ported from PR #1 by HugeFrog24.
+        """
+        try:
+            if iface is None:
+                iface = self._get_pan_interface() or "bnep0"
+            result = subprocess.check_output(
+                ["ip", "-6", "addr", "show", iface, "scope", "global"],
+                text=True,
+                timeout=5,
+            )
+            for line in result.splitlines():
+                line = line.strip()
+                if line.startswith("inet6"):
+                    # "inet6 2a00:20:b2d5:bdeb::1/64" -> "2a00:20:b2d5:bdeb::1"
+                    return line.split()[1].split("/")[0]
+            return None
+        except Exception as e:
+            logging.debug(f"[bt-tether] Failed to get IPv6 for {iface}: {e}")
             return None
 
     def _pair_device_interactive(self, mac, needs_discovery=True):
