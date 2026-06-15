@@ -380,6 +380,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         if (st === 'ERROR') {
           return setHero('⛔', 'Error', statusData.message || 'Something went wrong', '#f85149');
         }
+        if (statusData.phone_tethering_off && !data.connected) {
+          return setHero('📴', 'Enable tethering on phone',
+            'Phone refused — turn on Settings → Hotspot &amp; tethering → Bluetooth tethering', '#f0883e');
+        }
         if (statusData.reconnect_paused) {
           const secs = statusData.cooldown_remaining || 0;
           const when = secs > 0
@@ -1186,6 +1190,9 @@ class BTTetherHelper(Plugin):
     # ~30s D-Bus timeout, freezing whatever thread called us. We bound it ourselves
     # and stay responsive to shutdown / user-disconnect instead.
     NAP_CONNECT_TIMEOUT = 20
+    # Consecutive br-connection-busy NAP failures before we restart bluetooth to
+    # clear a stuck BlueZ "connecting" state.
+    BUSY_RECOVERY_THRESHOLD = 3
     DHCP_KILL_WAIT = 0.5  # Wait after killing dhclient
     DHCP_RELEASE_WAIT = 1  # Wait after releasing DHCP lease
 
@@ -1254,6 +1261,17 @@ class BTTetherHelper(Plugin):
         self.nap_connect_timeout = self.options.get(
             "nap_connect_timeout", self.NAP_CONNECT_TIMEOUT
         )
+        # Speed up DHCP on the point-to-point PAN link (skip dhcpcd ARP probe /
+        # shorten dhclient backoff). Disable on exotic network setups.
+        self.fast_dhcp = self.options.get("fast_dhcp", True)
+
+        # True when the last NAP failure was "tethering not available on phone"
+        # (br-connection-profile-unavailable) - surfaced to the UI so the user
+        # knows to enable Bluetooth tethering on the phone.
+        self._phone_tethering_off = False
+        # Consecutive br-connection-busy NAP failures; used to trigger a bluetooth
+        # restart that clears a stuck BlueZ "connecting" state.
+        self._consecutive_busy = 0
 
         # Set when a connect/reconnect attempt in flight should give up early
         # (user requested disconnect, or plugin is unloading). Checked by the
@@ -1910,16 +1928,29 @@ class BTTetherHelper(Plugin):
             else:
                 display = "X"  # No device / disconnected
 
+            # Distinct hint when the phone is refusing the NAP service (tethering
+            # off on the phone) - "!" stands out from the normal steady glyphs.
+            tether_off = self._phone_tethering_off and not cached_status.get(
+                "connected", False
+            )
+            if tether_off:
+                display = "!"
+
             if self.show_mini_status:
                 ui.set("bt-status", display)
 
             if self.show_detailed_status:
-                try:
-                    detailed = self._format_detailed_status(cached_status)
-                    ui.set("bt-detail", detailed)
-                except Exception as detail_error:
-                    logging.debug(f"[bt-tether] Detailed status error: {detail_error}")
-                    ui.set("bt-detail", f"BT:{display}")
+                if tether_off:
+                    ui.set("bt-detail", "BT:Tether off?")
+                else:
+                    try:
+                        detailed = self._format_detailed_status(cached_status)
+                        ui.set("bt-detail", detailed)
+                    except Exception as detail_error:
+                        logging.debug(
+                            f"[bt-tether] Detailed status error: {detail_error}"
+                        )
+                        ui.set("bt-detail", f"BT:{display}")
 
         except Exception as e:
             logging.debug(f"[bt-tether] UI update error: {e}")
@@ -2774,6 +2805,7 @@ default-agent
                             "reconnect_paused": paused,
                             "cooldown_remaining": cooldown_remaining,
                             "failure_count": self._reconnect_failure_count,
+                            "phone_tethering_off": self._phone_tethering_off,
                         }
                     )
 
@@ -4496,15 +4528,16 @@ default-agent
                 # dhcpcd ARP-probes the address for ~5-6s (duplicate-address
                 # detection). That's pointless on a point-to-point Bluetooth PAN
                 # link, so disable it via a minimal config - it's the single
-                # biggest chunk of connect time.
-                dhcpcd_cf = "/tmp/bt-tether-dhcpcd.conf"
+                # biggest chunk of connect time. Skipped when fast_dhcp is off.
                 cf_args = []
-                try:
-                    with open(dhcpcd_cf, "w") as cf:
-                        cf.write("noarp\n")
-                    cf_args = ["-f", dhcpcd_cf]
-                except Exception as e:
-                    logging.debug(f"[bt-tether] dhcpcd cf write failed: {e}")
+                if self.fast_dhcp:
+                    dhcpcd_cf = "/tmp/bt-tether-dhcpcd.conf"
+                    try:
+                        with open(dhcpcd_cf, "w") as cf:
+                            cf.write("noarp\n")
+                        cf_args = ["-f", dhcpcd_cf]
+                    except Exception as e:
+                        logging.debug(f"[bt-tether] dhcpcd cf write failed: {e}")
                 # Request new lease
                 result = subprocess.run(
                     ["sudo", "dhcpcd", "-4"] + cf_args + ["-n", iface],
@@ -4543,16 +4576,18 @@ default-agent
                 # dhclient's default initial DISCOVER backoff is a random delay of
                 # up to ~10s, which dominates lease time on a fast PAN link. A tiny
                 # config makes it retry quickly so the lease lands in ~1-2s.
-                dhclient_cf = "/tmp/bt-tether-dhclient.conf"
-                try:
-                    with open(dhclient_cf, "w") as cf:
-                        cf.write(
-                            "initial-interval 1;\nbackoff-cutoff 3;\ntimeout 25;\n"
-                        )
-                    cf_args = ["-cf", dhclient_cf]
-                except Exception as e:
-                    logging.debug(f"[bt-tether] dhclient cf write failed: {e}")
-                    cf_args = []
+                # Skipped when fast_dhcp is off.
+                cf_args = []
+                if self.fast_dhcp:
+                    dhclient_cf = "/tmp/bt-tether-dhclient.conf"
+                    try:
+                        with open(dhclient_cf, "w") as cf:
+                            cf.write(
+                                "initial-interval 1;\nbackoff-cutoff 3;\ntimeout 25;\n"
+                            )
+                        cf_args = ["-cf", dhclient_cf]
+                    except Exception as e:
+                        logging.debug(f"[bt-tether] dhclient cf write failed: {e}")
 
                 # Request new lease with better error handling.
                 # Run via Popen and poll so a mid-request disconnect/shutdown can
@@ -5457,6 +5492,30 @@ default-agent
         except Exception as e:
             logging.debug(f"[bt-tether] NAP link teardown failed: {e}")
 
+    def _recover_stuck_bluetooth(self):
+        """Restart bluetooth to clear a stuck 'connecting'/busy controller state.
+
+        Triggered after repeated br-connection-busy failures, where BlueZ keeps
+        rejecting new connects because it thinks one is already in progress.
+        """
+        self._log(
+            "WARNING",
+            "Repeated br-connection-busy - restarting Bluetooth to clear stuck state",
+        )
+        try:
+            subprocess.run(
+                ["systemctl", "restart", "bluetooth"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=self.BLUETOOTH_RESTART_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            pass
+        except Exception as e:
+            self._log("WARNING", f"Bluetooth recovery restart failed: {e}")
+        self._wait_for_bluetooth_ready(timeout=self.SUBPROCESS_TIMEOUT_LONG)
+        self._consecutive_busy = 0
+
     def _connect_nap_dbus(self, mac, timeout=None):
         """Connect to NAP service using DBus directly.
 
@@ -5551,6 +5610,8 @@ default-agent
                 logging.info(
                     f"[bt-tether] ✓ NAP profile connected successfully via DBus"
                 )
+                self._phone_tethering_off = False
+                self._consecutive_busy = 0
                 return True
 
             # Re-raise non-DBus errors to the outer handler
@@ -5560,6 +5621,20 @@ default-agent
             try:
                 error_msg = str(dbus_err)
                 logging.error(f"[bt-tether] DBus NAP connection failed: {dbus_err}")
+
+                # Classify the failure for the UI / recovery logic
+                is_tether_off = (
+                    "br-connection-create-socket" in error_msg
+                    or "br-connection-profile-unavailable" in error_msg
+                )
+                is_busy = (
+                    "br-connection-busy" in error_msg or "InProgress" in error_msg
+                )
+                self._phone_tethering_off = is_tether_off
+                if is_busy:
+                    self._consecutive_busy += 1
+                else:
+                    self._consecutive_busy = 0
 
                 # Check for authentication/pairing errors - if phone was unpaired, remove pairing on Pwnagotchi side too
                 # BUT: Don't remove for tethering-disabled errors (br-connection-create-socket, br-connection-profile-unavailable)
@@ -5626,11 +5701,15 @@ default-agent
                         "ERROR",
                         "🔌 Finally, reconnect from the web UI to re-pair",
                     )
-                elif "br-connection-busy" in error_msg or "InProgress" in error_msg:
+                elif is_busy:
                     self._log(
                         "ERROR",
                         "⚠️  Bluetooth connection is busy, wait a moment and try again",
                     )
+                    # A persistent busy state means BlueZ is stuck mid-connect;
+                    # restart bluetooth to clear it rather than retrying forever.
+                    if self._consecutive_busy >= self.BUSY_RECOVERY_THRESHOLD:
+                        self._recover_stuck_bluetooth()
 
                 return False
             except Exception as parse_err:

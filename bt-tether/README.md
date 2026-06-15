@@ -87,6 +87,7 @@ reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (defa
 
 # Connection Settings
 nap_connect_timeout = 20  # Max seconds to wait for a NAP connect before giving up (default: 20)
+fast_dhcp = true  # Skip dhcpcd ARP probe / shorten dhclient backoff for faster DHCP on the PAN link (default: true)
 ```
 
 ## Usage
@@ -156,6 +157,7 @@ _Steady (settled state):_
 | **N** | No internet  | Connected link but no internet yet   |
 | **P** | Paired       | Paired but not connected             |
 | **X** | Disconnected | No device / not connected            |
+| **!** | Tether off   | Phone refused — enable Bluetooth tethering on the phone |
 | **?** | Error        | Unknown state or error               |
 
 Position can be customized with `mini_status_position = [x, y]` (default: `[110, 0]`).
