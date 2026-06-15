@@ -1,4 +1,4 @@
-# bt-tether (v1.2.5)
+# bt-tether (v1.3.0)
 
 > **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
 >
@@ -28,6 +28,9 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 - **Automatic Pairing & Discovery**: Scan and pair with your phone directly from the web UI—no need to manually enter MAC addresses (works with iOS randomized MACs)
 - **Auto-Connect on Startup**: Automatically finds and connects to trusted devices when Pwnagotchi boots
 - **Auto-Reconnect**: Monitors the connection and automatically reconnects when it drops
+- **Fast connect**: Connects in a few seconds — bounded NAP timeout, adapter-readiness polling, and skipping the pointless DHCP ARP probe on the PAN link (tunable via `fast_dhcp`)
+- **Self-healing**: Recovers from stuck Bluetooth states automatically (e.g. restarts the BT service after repeated "connection busy" errors) and never freezes the loop on an unresponsive phone
+- **Clear status**: Distinguishes settled vs in-progress states on the e-ink screen and a colour-coded web banner — including an explicit prompt when the phone's Bluetooth tethering is turned off
 - **Status Display**: Real-time connection status on Pwnagotchi's e-ink screen (mini + detailed)
 - **PAN (Personal Area Network) Support**: Automatic network interface and DHCP configuration
 - **Plugin Event System**: Emits `bt_tether_connected` and `bt_tether_disconnected` events that other plugins can listen to for custom integrations (see [Related Plugins](#related-plugins))
@@ -338,6 +341,12 @@ Use these plugins as reference implementations when building your own custom int
 - Make sure your phone is in Bluetooth settings (visible/discoverable)
 - Check that pairing dialog appears on phone within 90 seconds
 - Try disconnecting the device first, then scan and pair again
+
+### "Enable tethering on phone" / mini status shows `!`
+
+- The phone is paired but refusing the tethering service (`br-connection-profile-unavailable`). **Bluetooth tethering is turned off on the phone** — re-enable it under Settings → Network & internet → Hotspot & tethering → Bluetooth tethering.
+- Android often auto-disables Bluetooth tethering after a while or after disconnects; toggle it off and back on.
+- Make sure the phone has an active internet connection (mobile data) to share.
 
 ### Connection Succeeds but No Internet
 
