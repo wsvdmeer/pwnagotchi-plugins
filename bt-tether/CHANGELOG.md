@@ -2,6 +2,27 @@
 
 All notable changes to the **bt-tether** plugin are documented here.
 
+## [1.4.1] - 2026-06-16
+
+### Added
+- **Adaptive reconnect backoff.** After a connection drops, the monitor now
+  retries every `reconnect_fast_interval` seconds (default 15) for the first few
+  cycles - to quickly catch a phone that only briefly left range - then backs
+  off to `reconnect_interval` if it stays disconnected. No fast-polling when
+  connected or when no device is paired.
+
+### Fixed
+- **Reconnect cycle could wedge after a failed attempt.** Removing the
+  disconnect-on-abandon (which fired while BlueZ's connect was still pending)
+  no longer leaves the adapter stuck in `br-connection-busy`; a stale half-open
+  ACL is now cleared *before* connecting, and an unresponsive phone trips a
+  clean wall-clock abandon that breaks the retry loop instead of hammering.
+- **e-ink could freeze.** `on_ui_update` (shared display thread) no longer makes
+  blocking `ip`/D-Bus/`bluetoothctl` calls on a connection-timeout, and
+  `start_connection()` no longer holds `self.lock` during device enumeration -
+  both could stall the display. Audited: no blocking calls remain inside any
+  UI-contended lock.
+
 ## [1.4.0] - 2026-06-15
 
 ### Added

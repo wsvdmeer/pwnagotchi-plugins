@@ -1,4 +1,4 @@
-# bt-tether (v1.4.0)
+# bt-tether (v1.4.1)
 
 > **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
 >
@@ -87,6 +87,7 @@ detailed_status_position = [0, 82]  # Position for detailed status (default: [0,
 # Auto-Reconnect Settings
 auto_reconnect = true  # Automatically reconnect when connection drops (default: true)
 reconnect_interval = 60  # Check connection every N seconds (default: 60)
+reconnect_fast_interval = 15  # Faster retry right after a drop, then backs off to reconnect_interval (default: 15)
 reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (default: 300 = 5 minutes)
 
 # Connection Settings

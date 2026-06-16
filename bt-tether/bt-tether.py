@@ -1136,7 +1136,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.4.0"
+    __version__ = "1.4.1"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1205,6 +1205,11 @@ class BTTetherHelper(Plugin):
 
     # Reconnect configuration constants
     DEFAULT_RECONNECT_INTERVAL = 60  # Default seconds between reconnect checks
+    # Adaptive backoff: right after a drop, retry every RECONNECT_FAST_INTERVAL
+    # seconds for the first RECONNECT_FAST_CYCLES cycles (to quickly catch a phone
+    # that only briefly left range), then fall back to the normal interval.
+    DEFAULT_RECONNECT_FAST_INTERVAL = 15
+    RECONNECT_FAST_CYCLES = 6
     MAX_RECONNECT_FAILURES = 5  # Max consecutive failures before cooldown
     DEFAULT_RECONNECT_FAILURE_COOLDOWN = 300  # Default cooldown in seconds (5 minutes)
 
@@ -1265,6 +1270,11 @@ class BTTetherHelper(Plugin):
         self.reconnect_interval = self.options.get(
             "reconnect_interval", self.DEFAULT_RECONNECT_INTERVAL
         )
+        self.reconnect_fast_interval = self.options.get(
+            "reconnect_fast_interval", self.DEFAULT_RECONNECT_FAST_INTERVAL
+        )
+        # Cycles spent disconnected (drives adaptive reconnect backoff)
+        self._disconnected_cycles = 0
         self.nap_connect_timeout = self.options.get(
             "nap_connect_timeout", self.NAP_CONNECT_TIMEOUT
         )
@@ -2138,6 +2148,38 @@ default-agent
         except Exception as e:
             logging.error(f"[bt-tether] Failed to start monitoring thread: {e}")
 
+    def _adaptive_wait(self):
+        """Interruptible monitor wait with adaptive reconnect backoff.
+
+        Right after a drop, retry quickly (reconnect_fast_interval) to catch a
+        phone that only briefly left range, then back off to reconnect_interval
+        if it stays down. When connected (steady health check) or paused (no
+        trusted device) we always use the full interval - no point fast-polling.
+        Returns immediately if shutdown was requested.
+        """
+        if self._last_known_connected or self._monitor_paused.is_set():
+            self._disconnected_cycles = 0
+            interval = self.reconnect_interval
+        elif (
+            self.reconnect_fast_interval >= self.reconnect_interval
+            or self._nap_attempt_abandoned
+        ):
+            # Either fast-retry is disabled, or the last attempt abandoned on the
+            # wall-clock budget (phone present but not answering) - BlueZ's connect
+            # is still settling, so fast-retrying would hit br-connection-busy.
+            # Use the normal interval to let it clear.
+            interval = self.reconnect_interval
+        else:
+            # Clean/fast failure (phone off or out of range) - retry quickly to
+            # catch it the moment it returns.
+            self._disconnected_cycles += 1
+            interval = (
+                self.reconnect_fast_interval
+                if self._disconnected_cycles <= self.RECONNECT_FAST_CYCLES
+                else self.reconnect_interval
+            )
+        self._monitor_stop.wait(interval)
+
     def _connection_monitor_loop(self):
         """Background loop to monitor connection status and reconnect if needed"""
         logging.info("[bt-tether] Connection monitor started")
@@ -2153,7 +2195,7 @@ default-agent
                     connection_in_progress = self._connection_in_progress
 
                 if connection_in_progress:
-                    self._monitor_stop.wait(self.reconnect_interval)
+                    self._adaptive_wait()
                     continue
 
                 best_device = self._find_best_device_to_connect(log_results=False)
@@ -2165,7 +2207,7 @@ default-agent
                         )
                         self._monitor_paused.set()
 
-                    self._monitor_stop.wait(self.reconnect_interval)
+                    self._adaptive_wait()
                     continue
 
                 current_mac = best_device["mac"]
@@ -2293,7 +2335,7 @@ default-agent
 
                     # Skip the rest of this iteration - we already handled reconnection
                     # Using stale `status` below would cause a double-reconnect attempt
-                    self._monitor_stop.wait(self.reconnect_interval)
+                    self._adaptive_wait()
                     continue
 
                 # Force screen refresh if connection state changed
@@ -2399,8 +2441,8 @@ default-agent
             except Exception as e:
                 logging.error(f"[bt-tether] Monitor loop error: {e}")
 
-            # Wait for next check (interruptible so shutdown is prompt)
-            self._monitor_stop.wait(self.reconnect_interval)
+            # Wait for next check (interruptible; adaptive backoff after a drop)
+            self._adaptive_wait()
 
         logging.info("[bt-tether] Connection monitor stopped")
 
