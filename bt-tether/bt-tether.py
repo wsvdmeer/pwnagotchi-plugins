@@ -5566,22 +5566,31 @@ default-agent
         except Exception as e:
             self._log("WARNING", f"Failed to set device name: {e}")
 
-    def _abort_nap_link(self, mac):
-        """Tear down a half-open BT link after an abandoned NAP attempt.
+    def _clear_stale_acl(self, mac):
+        """Tear down a half-open ACL before connecting, if one lingers.
 
-        When we give up on the wall-clock budget, BlueZ's underlying connect may
-        still be in flight. Disconnecting clears it so the next attempt starts
-        from a clean state instead of overlapping (which the phone refuses).
+        A failed NAP attempt can leave an ACL at the HCI layer (hcitool shows a
+        connection) while BlueZ reports the device disconnected. That stale link
+        makes the next ConnectProfile hang with NoReply. We clear it *before*
+        starting a fresh connect (when nothing is pending), so the teardown can't
+        wedge BlueZ into br-connection-busy the way a mid-connect disconnect does.
         """
         try:
-            self._run_cmd(
-                ["bluetoothctl", "disconnect", mac],
+            con = self._run_cmd(
+                ["sudo", "hcitool", "con"],
                 capture=True,
-                timeout=self.SUBPROCESS_TIMEOUT_STANDARD,
+                timeout=self.SUBPROCESS_TIMEOUT_NORMAL,
             )
-            logging.debug(f"[bt-tether] Tore down half-open link to {mac}")
+            if con and con != "Timeout" and mac.upper() in con.upper():
+                self._log("INFO", f"Clearing stale link to {mac} before connecting")
+                self._run_cmd(
+                    ["bluetoothctl", "disconnect", mac],
+                    capture=True,
+                    timeout=self.SUBPROCESS_TIMEOUT_STANDARD,
+                )
+                time.sleep(self.DEVICE_OPERATION_DELAY)
         except Exception as e:
-            logging.debug(f"[bt-tether] NAP link teardown failed: {e}")
+            logging.debug(f"[bt-tether] Stale ACL check failed: {e}")
 
     def _recover_stuck_bluetooth(self):
         """Restart bluetooth to clear a stuck 'connecting'/busy controller state.
@@ -5656,14 +5665,21 @@ default-agent
                 bus.get_object("org.bluez", device_path), "org.bluez.Device1"
             )
 
+            # Clear any stale half-open ACL before connecting so it can't make
+            # ConnectProfile hang with NoReply.
+            self._clear_stale_acl(mac)
+
             # Run ConnectProfile in a worker thread so we can bound the wall-clock
             # wait ourselves and stay responsive to shutdown / user-disconnect.
             result = {"err": None, "done": False}
 
             def _do_connect_profile():
                 try:
-                    # Give BlueZ slightly longer than our budget so our own wait,
-                    # not the D-Bus layer, is normally what bounds the attempt.
+                    # Slightly longer than our wall-clock budget so that for an
+                    # unresponsive phone (NoReply) our wall-clock abandon fires
+                    # first and sets _nap_attempt_abandoned -> the connect-thread
+                    # retry loop breaks instead of rapidly retrying into BlueZ's
+                    # still-pending connect (which returns br-connection-busy).
                     device.ConnectProfile(self.NAP_UUID, timeout=timeout + 5)
                 except BaseException as e:  # noqa: BLE001 - capture for caller
                     result["err"] = e
@@ -5691,9 +5707,11 @@ default-agent
                         f"NAP connect exceeded {timeout}s budget - abandoning attempt "
                         f"(phone likely off or out of range)",
                     )
-                    # Tear down the half-open link so the abandoned ConnectProfile
-                    # doesn't linger and make the next attempt overlap / get refused.
-                    self._abort_nap_link(mac)
+                    # Deliberately do NOT issue a disconnect here: doing so while
+                    # BlueZ's ConnectProfile is still pending wedges the adapter
+                    # into br-connection-busy, so subsequent reconnect attempts
+                    # fail until a bluetooth restart. Let BlueZ's own timeout
+                    # clear the pending op; the next monitor cycle starts clean.
                     return False
 
             dbus_err = result["err"]
