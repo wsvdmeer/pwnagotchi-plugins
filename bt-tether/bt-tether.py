@@ -3824,16 +3824,18 @@ default-agent
             return []
 
     def start_connection(self):
+        # The device lookup does D-Bus / bluetoothctl I/O. Keep it OUTSIDE
+        # self.lock so it can't stall on_ui_update (the display thread also
+        # acquires self.lock) and freeze the e-ink while we enumerate devices.
+        best_device = self._find_best_device_to_connect()
+        if not best_device:
+            self._set_state(
+                self.STATE_ERROR,
+                "No trusted devices found - scan and pair a device first",
+            )
+            return
+
         with self.lock:
-            # Find the best device to connect to (trusted devices or configured MAC)
-            best_device = self._find_best_device_to_connect()
-
-            if not best_device:
-                self.status = self.STATE_ERROR
-                self.message = "No trusted devices found - scan and pair a device first"
-                self._screen_needs_refresh = True
-                return
-
             # Update current target MAC
             self.phone_mac = best_device["mac"]
             self.options["mac"] = self.phone_mac
