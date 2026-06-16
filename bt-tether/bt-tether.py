@@ -1829,7 +1829,20 @@ class BTTetherHelper(Plugin):
                         self.status = self.STATE_ERROR
                         self.message = "Connection timeout - operation took too long"
                         self._screen_needs_refresh = True
-                    self._update_cached_ui_status()
+                    # on_ui_update runs on the shared display thread and MUST stay
+                    # non-blocking. Pass an explicit status so we don't fall into
+                    # _get_current_status() (ip/D-Bus/bluetoothctl subprocesses),
+                    # which would stall the e-ink for all plugins.
+                    self._update_cached_ui_status(
+                        status={
+                            "paired": True,
+                            "trusted": True,
+                            "connected": False,
+                            "pan_active": False,
+                            "interface": None,
+                            "ip_address": None,
+                        }
+                    )
                     connection_in_progress = False
 
             if disconnecting and disconnect_start_time:
