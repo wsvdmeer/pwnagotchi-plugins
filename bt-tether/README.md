@@ -1,4 +1,4 @@
-# bt-tether (v1.4.1)
+# bt-tether (v1.4.2)
 
 > **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
 >
@@ -89,6 +89,7 @@ auto_reconnect = true  # Automatically reconnect when connection drops (default:
 reconnect_interval = 60  # Check connection every N seconds (default: 60)
 reconnect_fast_interval = 15  # Faster retry right after a drop, then backs off to reconnect_interval (default: 15)
 reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (default: 300 = 5 minutes)
+reboot_on_stuck_bluetooth = false  # Opt-in: reboot the Pi when the BT controller wedges (only a power-cycle clears it). Off by default (default: false)
 
 # Connection Settings
 nap_connect_timeout = 20  # Max seconds to wait for a NAP connect before giving up (default: 20)
@@ -162,7 +163,7 @@ _Steady (settled state):_
 | **N** | No internet  | Connected link but no internet yet   |
 | **P** | Paired       | Paired but not connected             |
 | **X** | Disconnected | No device / not connected            |
-| **!** | Tether off   | Phone refused — enable Bluetooth tethering on the phone |
+| **!** | Attention    | Phone refused tethering, **or** the BT controller is stuck (power-cycle the Pi) — detailed line says which |
 | **?** | Error        | Unknown state or error               |
 
 Position can be customized with `mini_status_position = [x, y]` (default: `[110, 0]`).
@@ -188,6 +189,7 @@ Full status line at a configurable position:
 | **BT:Disconnected**     | Not connected                     |
 | **BT:No device**        | No paired device found            |
 | **BT:Tether off?**      | Phone refused — enable Bluetooth tethering on the phone |
+| **BT:Stuck-reboot**     | BT controller wedged — power-cycle the Pi to recover |
 | **BT:Error**            | Error or unknown state            |
 
 Position can be customized with `detailed_status_position = [x, y]` (default: `[0, 82]`).

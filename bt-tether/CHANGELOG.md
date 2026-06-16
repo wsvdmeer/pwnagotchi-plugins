@@ -2,6 +2,21 @@
 
 All notable changes to the **bt-tether** plugin are documented here.
 
+## [1.4.2] - 2026-06-17
+
+### Added
+- **Wedged-controller detection + message.** After repeated no-reply abandons
+  (BlueZ accepts the connect but never completes — the signature of a wedged
+  controller, distinct from the phone simply being off/away), the plugin now
+  surfaces **"Bluetooth controller stuck — power-cycle the Pi"** on the web
+  banner and e-ink (`BT:Stuck-reboot`, mini glyph `!`). It also reports
+  `bt_stuck` via `/status`.
+- **Opt-in `reboot_on_stuck_bluetooth`** (default **false**): reboots the Pi to
+  clear a wedged controller, since a `systemctl restart bluetooth` does not
+  clear a true hardware wedge — only a power-cycle does. Guarded against
+  reboot-loops (only reboots if it had connected since boot, and at most once
+  per 30 minutes).
+
 ## [1.4.1] - 2026-06-16
 
 ### Added

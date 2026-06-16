@@ -377,6 +377,10 @@ HTML_TEMPLATE = """<!DOCTYPE html>
           return setHero('⚠️', 'Connected · no internet',
             'Linked but no route out — enable Bluetooth tethering on your phone', '#d29922');
         }
+        if (statusData.bt_stuck && !data.connected) {
+          return setHero('🛑', 'Bluetooth controller stuck',
+            'Repeated no-reply - power-cycle the Pi to recover (a BT restart is not enough)', '#f85149');
+        }
         if (st === 'ERROR') {
           return setHero('⛔', 'Error', statusData.message || 'Something went wrong', '#f85149');
         }
@@ -1136,7 +1140,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.4.1"
+    __version__ = "1.4.2"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1200,6 +1204,13 @@ class BTTetherHelper(Plugin):
     # Consecutive br-connection-busy NAP failures before we restart bluetooth to
     # clear a stuck BlueZ "connecting" state.
     BUSY_RECOVERY_THRESHOLD = 3
+    # Consecutive wall-clock abandons (BlueZ accepts the connect but never
+    # completes = NoReply) before we declare the controller "stuck". This is the
+    # signature of a wedged adapter (distinct from create-socket/page-timeout,
+    # which just mean the phone is off / out of range).
+    BT_STUCK_THRESHOLD = 5
+    # Don't auto-reboot for a stuck controller more than once per this window.
+    STUCK_REBOOT_MIN_INTERVAL = 1800  # 30 minutes
     DHCP_KILL_WAIT = 0.5  # Wait after killing dhclient
     DHCP_RELEASE_WAIT = 1  # Wait after releasing DHCP lease
 
@@ -1289,6 +1300,20 @@ class BTTetherHelper(Plugin):
         # Consecutive br-connection-busy NAP failures; used to trigger a bluetooth
         # restart that clears a stuck BlueZ "connecting" state.
         self._consecutive_busy = 0
+        # Consecutive wall-clock abandons (NoReply) -> wedged-controller detection.
+        self._consecutive_abandons = 0
+        # True once we declare the BT controller stuck (surfaced on screen/web).
+        self._bt_stuck = False
+        # True once we have connected at least once since boot (guards auto-reboot
+        # so we never reboot-loop on a phone that was simply never reachable).
+        self._ever_connected = False
+
+        # Opt-in: reboot the Pi to clear a wedged BT controller (a bluetooth
+        # service restart does NOT clear a true hardware wedge - only a reboot).
+        # Off by default since auto-rebooting a pwnagotchi mid-capture is drastic.
+        self.reboot_on_stuck_bluetooth = self.options.get(
+            "reboot_on_stuck_bluetooth", False
+        )
 
         # Set when a connect/reconnect attempt in flight should give up early
         # (user requested disconnect, or plugin is unloading). Checked by the
@@ -1960,19 +1985,21 @@ class BTTetherHelper(Plugin):
             else:
                 display = "X"  # No device / disconnected
 
-            # Distinct hint when the phone is refusing the NAP service (tethering
-            # off on the phone) - "!" stands out from the normal steady glyphs.
-            tether_off = self._phone_tethering_off and not cached_status.get(
-                "connected", False
-            )
-            if tether_off:
+            # Distinct hints that stand out from the normal steady glyphs:
+            #  "!" = phone refusing NAP (tethering off) or controller wedged.
+            connected_now = cached_status.get("connected", False)
+            bt_stuck = self._bt_stuck and not connected_now
+            tether_off = self._phone_tethering_off and not connected_now
+            if bt_stuck or tether_off:
                 display = "!"
 
             if self.show_mini_status:
                 ui.set("bt-status", display)
 
             if self.show_detailed_status:
-                if tether_off:
+                if bt_stuck:
+                    ui.set("bt-detail", "BT:Stuck-reboot")
+                elif tether_off:
                     ui.set("bt-detail", "BT:Tether off?")
                 else:
                     try:
@@ -2871,6 +2898,7 @@ default-agent
                             "cooldown_remaining": cooldown_remaining,
                             "failure_count": self._reconnect_failure_count,
                             "phone_tethering_off": self._phone_tethering_off,
+                            "bt_stuck": self._bt_stuck,
                         }
                     )
 
@@ -5673,6 +5701,54 @@ default-agent
         self._wait_for_bluetooth_ready(timeout=self.SUBPROCESS_TIMEOUT_LONG)
         self._consecutive_busy = 0
 
+    def _handle_bt_stuck(self):
+        """Repeated no-reply abandons => the BT controller looks wedged.
+
+        Surface it clearly on screen/web. Optionally (opt-in) reboot, since a
+        bluetooth service restart does NOT clear a true controller wedge - only a
+        power-cycle does. Guarded so it can't reboot-loop: only if we had actually
+        connected since boot, and at most once per STUCK_REBOOT_MIN_INTERVAL.
+        """
+        if not self._bt_stuck:
+            self._log(
+                "ERROR",
+                "⚠️  Bluetooth controller appears stuck (repeated no-reply). "
+                "A power-cycle / reboot of the Pi usually clears it.",
+            )
+        self._bt_stuck = True
+        with self.lock:
+            self.message = "Bluetooth stuck - power-cycle the Pi to recover"
+            self._screen_needs_refresh = True
+
+        if not (self.reboot_on_stuck_bluetooth and self._ever_connected):
+            return
+
+        stamp = "/etc/pwnagotchi/.bt-tether-reboot-stamp"
+        try:
+            with open(stamp) as f:
+                if time.time() - float(f.read().strip()) < self.STUCK_REBOOT_MIN_INTERVAL:
+                    self._log(
+                        "WARNING",
+                        "Stuck BT, but a recovery reboot happened recently - not rebooting again yet",
+                    )
+                    return
+        except Exception:
+            pass  # no/unreadable stamp -> allowed
+
+        self._log(
+            "WARNING",
+            "reboot_on_stuck_bluetooth is set - rebooting to clear the wedged BT controller",
+        )
+        try:
+            with open(stamp, "w") as f:
+                f.write(str(time.time()))
+        except Exception as e:
+            logging.debug(f"[bt-tether] reboot stamp write failed: {e}")
+        try:
+            subprocess.run(["sudo", "reboot"], timeout=10)
+        except Exception as e:
+            self._log("ERROR", f"Auto-reboot failed: {e}")
+
     def _connect_nap_dbus(self, mac, timeout=None):
         """Connect to NAP service using DBus directly.
 
@@ -5759,6 +5835,7 @@ default-agent
                     return False
                 if time.monotonic() >= deadline:
                     self._nap_attempt_abandoned = True
+                    self._consecutive_abandons += 1
                     self._log(
                         "WARNING",
                         f"NAP connect exceeded {timeout}s budget - abandoning attempt "
@@ -5769,6 +5846,8 @@ default-agent
                     # into br-connection-busy, so subsequent reconnect attempts
                     # fail until a bluetooth restart. Let BlueZ's own timeout
                     # clear the pending op; the next monitor cycle starts clean.
+                    if self._consecutive_abandons >= self.BT_STUCK_THRESHOLD:
+                        self._handle_bt_stuck()
                     return False
 
             dbus_err = result["err"]
@@ -5778,7 +5857,14 @@ default-agent
                 )
                 self._phone_tethering_off = False
                 self._consecutive_busy = 0
+                self._consecutive_abandons = 0
+                self._bt_stuck = False
+                self._ever_connected = True
                 return True
+
+            # Any fast/clean error means BlueZ responded (not a wedge) - reset the
+            # abandon streak so only genuinely consecutive NoReply abandons count.
+            self._consecutive_abandons = 0
 
             # Re-raise non-DBus errors to the outer handler
             if not isinstance(dbus_err, dbus.exceptions.DBusException):
