@@ -1,8 +1,10 @@
-# bt-tether-discord (v1.0.0)
+# bt-tether-discord (v1.1.0)
 
-> Sends a Discord notification when Bluetooth tethering connects with internet access.
+> Sends a Discord notification when Bluetooth tethering connects or disconnects.
 
-Listens to events emitted by the `bt-tether` plugin and posts a formatted embed to a Discord webhook when the device is fully connected (IP confirmed).
+Listens to events emitted by the `bt-tether` plugin and posts a formatted embed to a Discord webhook when the device is fully connected (IP confirmed) — a blue embed on connect and a red one on disconnect.
+
+The webhook POST runs on a background daemon thread, so a slow or unreachable Discord endpoint never stalls the `bt-tether` worker. Repeated events of the same kind within 30 seconds are debounced to avoid spam from reconnect churn.
 
 ---
 
@@ -19,6 +21,7 @@ event_data = {
     "mac": "AA:BB:CC:DD:EE:FF",
     "device": "iPhone 15",
     "ip": "192.168.x.x",
+    "ipv6": "2001:db8::1",  # or None when no global IPv6
     "interface": "bnep0",
     "pwnagotchi_name": "pwnagotchi",
 }
@@ -135,7 +138,7 @@ class BtTetherWebhook(Plugin):
 
 ## Dependencies
 
-- `bt-tether` plugin v1.2.4+ (provides the events)
+- `bt-tether` plugin v1.3.0+ (provides the events, including the `ipv6` field)
 
 ## Troubleshooting
 

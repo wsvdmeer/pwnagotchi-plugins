@@ -1,13 +1,16 @@
-# bt-tether-telegram
+# bt-tether-telegram (v1.1.0)
 
-A Pwnagotchi plugin that sends Telegram notifications when Bluetooth tethering connects.
+A Pwnagotchi plugin that sends Telegram notifications when Bluetooth tethering connects or disconnects.
 
 ## Features
 
-- 📱 Sends Telegram messages when Bluetooth tethering is established
-- 📊 Includes IP address and device information in notifications
+- 📱 Sends Telegram messages when Bluetooth tethering connects **and** when it disconnects
+- 📊 Includes IP address (IPv4 + IPv6 when available) and device information in notifications
 - 🔗 Includes link to Pwnagotchi web interface
-- ✅ Error handling and logging for troubleshooting
+- 🧵 Non-blocking: the API call runs on a background thread, so a slow/unreachable Telegram endpoint never stalls `bt-tether`
+- 🔁 Debounced: repeated events of the same kind within 30 seconds are suppressed to avoid rate-limit spam
+- 🛡️ Device/pwnagotchi names are Markdown-escaped so special characters can't break the message (HTTP 400)
+- ✅ Error handling and logging for troubleshooting (bot token is never written to the logs)
 
 ## Requirements
 
@@ -53,8 +56,15 @@ The plugin listens for events from the [`bt-tether`](../bt-tether/) plugin:
 - **Connection Event**: When Bluetooth tethering connects, sends a notification with:
   - Pwnagotchi device name
   - Connected device name
-  - IP address
+  - IP address (IPv4, plus IPv6 when a global address is available)
   - Link to web interface
+- **Disconnection Event**: When the link drops or is torn down by the user, sends a notification with the device name and the reason (`connection_dropped` / `user_request`).
+
+Both notifications are sent on a background daemon thread and are debounced (same event kind within 30 s is skipped).
+
+## Requirements (versions)
+
+- `bt-tether` plugin **v1.3.0+** (provides the events, including the `ipv6` field)
 
 ## Troubleshooting
 
