@@ -25,11 +25,11 @@ Comprehensive **Bluetooth tethering plugin** with web interface for managing int
 
 ### 🕐 rtc-datetime
 
-Simple plugin to display **current time and date** on the Pwnagotchi screen with RTC support.
+Simple plugin to display the **current time and date** (from the OS system clock) on the Pwnagotchi screen.
 
 - ⏰ **Customizable time/date format** (strftime syntax)
 - 🎯 **Configurable position** anywhere on screen
-- 🔧 **RTC integration** with timezone support
+- 📖 **Display only** — reads the system clock; keeping time accurate offline (NTP / hardware RTC) is an OS-level setup
 - 📍 **Bottom-left placement** by default
 
 **[📖 Full documentation →](rtc-datetime/README.md)**

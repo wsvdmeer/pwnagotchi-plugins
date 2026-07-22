@@ -1,12 +1,14 @@
 # 🕐 rtc-datetime
 
-A simple plugin that displays the **current time and date** on the Pwnagotchi screen using the system's RTC (Real-Time Clock).
+A simple plugin that displays the **current time and date** on the Pwnagotchi screen. It reads the **OS system clock** via Python's `time.strftime()` — it does not talk to any RTC hardware itself.
+
+> **Display only.** This plugin renders whatever the operating system clock reports. Keeping that clock accurate while offline is an OS-level concern: configure NTP, and (optionally) a hardware RTC module, at the system level — see the setup notes below. This plugin does not read, write, or sync an RTC.
 
 ## ✨ Features
 
 - **⏰ Customizable Format**: Configure time/date format using Python's strftime syntax
 - **🎯 Configurable Position**: Place the display anywhere on your screen
-- **🔧 RTC Integration**: Uses Raspberry Pi's hardware RTC or system time automatically
+- **🛡️ Format-safe**: an invalid format string falls back to the default instead of erroring every refresh
 
 ## 📦 Installation
 
@@ -59,9 +61,9 @@ Common strftime format codes:
 
 > 📚 Full reference: [Python strftime documentation](https://docs.python.org/3/library/datetime.html#strftime-and-strptime-format-codes)
 
-## 🌍 Setting Timezone on Raspberry Pi
+## 🌍 Setting Timezone / keeping time accurate on Raspberry Pi
 
-The plugin uses the system time, so proper timezone configuration is important.
+The plugin displays the OS system time, so keeping that clock correct — timezone, NTP, and optionally a hardware RTC — is done at the system level, not by this plugin.
 
 ### Using raspi-config (Recommended)
 
@@ -120,7 +122,7 @@ sudo timedatectl set-timezone <timezone>
 
 ## 📌 Version
 
-**1.0.0**
+**1.0.1**
 
 ## 🤝 Support
 

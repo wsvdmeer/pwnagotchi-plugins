@@ -8,22 +8,39 @@ from pwnagotchi.ui.view import BLACK
 
 class TimeDatePlugin(plugins.Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.0.0"
+    __version__ = "1.0.1"
     __license__ = "GPL3"
-    __description__ = "Display current time and date"
+    __description__ = "Display current date/time (from the OS system clock)"
+
+    DEFAULT_POSITION = (0, 92)  # default X, Y
+    DEFAULT_FORMAT = "%H:%M %d-%m"  # 24h + day-month
 
     def __init__(self):
-        self.ready = False
-        self.position = (0, 92)  # default X, Y
-        self.format = "%H:%M %d-%m"  # 24h + day-month
+        self.position = self.DEFAULT_POSITION
+        self.format = self.DEFAULT_FORMAT
 
     def on_loaded(self):
-        if "position" in self.options:
-            self.position = tuple(self.options["position"])
-        if "format" in self.options:
-            self.format = self.options["format"]
+        position = self.options.get("position")
+        if isinstance(position, (list, tuple)) and len(position) == 2:
+            self.position = tuple(position)
+        elif position is not None:
+            logging.warning(
+                "[datetime] ignoring invalid 'position' option %r; using %s",
+                position,
+                self.DEFAULT_POSITION,
+            )
+
+        fmt = self.options.get("format")
+        if isinstance(fmt, str) and fmt:
+            self.format = fmt
+        elif fmt is not None:
+            logging.warning(
+                "[datetime] ignoring invalid 'format' option %r; using %r",
+                fmt,
+                self.DEFAULT_FORMAT,
+            )
+
         logging.info(f"[datetime] plugin loaded with position {self.position}")
-        self.ready = True
 
     def on_ui_setup(self, ui):
         ui.add_element(
@@ -39,5 +56,15 @@ class TimeDatePlugin(plugins.Plugin):
         )
 
     def on_ui_update(self, ui):
-        current = time.strftime(self.format)  # uses system time / RTC
+        # Reads the OS system clock (which the Pi keeps via NTP or a hardware RTC
+        # configured at the OS level). A malformed format string would raise here
+        # on every refresh, so fall back to the default rather than spam the loop.
+        try:
+            current = time.strftime(self.format)
+        except (ValueError, TypeError):
+            logging.warning(
+                "[datetime] invalid format %r; falling back to default", self.format
+            )
+            self.format = self.DEFAULT_FORMAT
+            current = time.strftime(self.format)
         ui.set("datetime", current)
