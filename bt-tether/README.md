@@ -362,6 +362,24 @@ Use these plugins as reference implementations when building your own custom int
 - Check if USB is connected — USB takes priority over Bluetooth (see Active Connection in web UI)
 - Try disconnecting and reconnecting
 
+### Occasional Drops or Stalls (WiFi & Bluetooth Share One Radio)
+
+On Raspberry Pi boards with onboard wireless (Pi Zero W, Pi 3/3B+, **Pi Zero 2 W**, Pi 4), WiFi and Bluetooth are **not separate radios** — they're a single Broadcom/Cypress combo chip (BCM43438 on Pi Zero W / Pi 3; CYW43455 on Pi Zero 2 W / 3B+ / 4) that shares **one radio and one antenna** between the two. The chip splits airtime between WiFi and Bluetooth using a scheme called **coexistence (coex)**, essentially time-slicing the shared radio.
+
+Pwnagotchi keeps WiFi in **monitor mode, channel-hopping continuously** to capture handshakes. That is heavy, near-constant WiFi radio usage, and it can starve the Bluetooth side of airtime. The practical symptoms:
+
+- Bluetooth tethering **drops intermittently** even though the phone never moved and its Bluetooth stayed on.
+- Higher latency or brief stalls over the PAN link while recon is busy.
+- A **"half-open" link**: the connection still looks up (BlueZ reports the device connected, `bnep0` is up), but traffic in the Pi→phone direction stalls because the BT side lost airtime.
+
+**This is a hardware/firmware limitation of the shared combo chip, not a fault in this plugin.** The built-in auto-reconnect is designed to ride out these transient drops and re-establish the link automatically.
+
+If the drops are frequent enough to be a problem, the options are all at the **OS/hardware level** (outside this plugin):
+
+- **Use an external USB WiFi adapter** for monitor-mode recon (e.g. one supported for injection). This is the most reliable fix: the onboard chip's radio is no longer being hammered by WiFi, so Bluetooth keeps its airtime.
+- **Adjust the firmware coexistence mode** (`btc_mode`) of the `brcmfmac` driver. This biases how the chip arbitrates airtime between WiFi and BT; the right value is board- and use-case-specific, and changing it can help or hurt, so treat it as advanced/experimental.
+- **Reduce WiFi aggressiveness** in your pwnagotchi config (fewer channels / less frequent hopping) so Bluetooth gets more of the shared radio.
+
 ### Bluetooth Service Unresponsive
 
 - The plugin automatically restarts hung Bluetooth services on startup
