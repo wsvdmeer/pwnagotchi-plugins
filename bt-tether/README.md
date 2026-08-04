@@ -29,7 +29,7 @@ _Optimizations have been applied for RPi Zero W2's resource constraints (512MB R
 - **Auto-Connect on Startup**: Automatically finds and connects to trusted devices when Pwnagotchi boots
 - **Auto-Reconnect**: Monitors the connection and automatically reconnects when it drops
 - **Fast connect**: Connects in a few seconds — bounded NAP timeout, adapter-readiness polling, and skipping the pointless DHCP ARP probe on the PAN link (tunable via `fast_dhcp`)
-- **Self-healing**: Recovers from stuck Bluetooth states automatically (e.g. restarts the BT service after repeated "connection busy" errors) and never freezes the loop on an unresponsive phone
+- **Self-healing**: Recovers from stuck Bluetooth states automatically (e.g. restarts the BT service after repeated "connection busy" errors, re-powers an unpowered/`NotReady` adapter via `bluetoothctl`, and escalates a truly wedged controller to the opt-in recovery reboot) and never freezes the loop on an unresponsive phone
 - **Clear status**: Distinguishes settled vs in-progress states on the e-ink screen and a colour-coded web banner — including an explicit prompt when the phone's Bluetooth tethering is turned off
 - **Dual-stack (IPv4 + IPv6)**: Verifies connectivity over IPv4 or IPv6. Some Android devices provide IPv6-only connectivity over Bluetooth tethering (no IPv4 on the PAN side); this is detected and handled automatically
 - **Status Display**: Real-time connection status on Pwnagotchi's e-ink screen (mini + detailed)
@@ -90,6 +90,14 @@ reconnect_interval = 60  # Check connection every N seconds (default: 60)
 reconnect_fast_interval = 15  # Faster retry right after a drop, then backs off to reconnect_interval (default: 15)
 reconnect_failure_cooldown = 300  # Cooldown after max failures in seconds (default: 300 = 5 minutes)
 reboot_on_stuck_bluetooth = false  # Opt-in: reboot the Pi when the BT controller wedges (only a power-cycle clears it). Off by default (default: false)
+
+# Half-Open Link Watchdog
+# On a shared WiFi+BT combo chip, the PAN can go "half-open": bnep0 stays up and
+# BlueZ still reports connected, but Pi->phone traffic is dead. The watchdog
+# actively probes phone reachability and resets Bluetooth to self-heal.
+watchdog_enabled = true  # Enable the half-open PAN watchdog (default: true)
+watchdog_dry_run = true  # Log only, don't reset BT — set false to enable healing (default: true)
+watchdog_fail_threshold = 3  # Consecutive half-open detections before resetting BT (default: 3)
 
 # Connection Settings
 nap_connect_timeout = 20  # Max seconds to wait for a NAP connect before giving up (default: 20)
@@ -372,7 +380,7 @@ Pwnagotchi keeps WiFi in **monitor mode, channel-hopping continuously** to captu
 - Higher latency or brief stalls over the PAN link while recon is busy.
 - A **"half-open" link**: the connection still looks up (BlueZ reports the device connected, `bnep0` is up), but traffic in the Pi→phone direction stalls because the BT side lost airtime.
 
-**This is a hardware/firmware limitation of the shared combo chip, not a fault in this plugin.** The built-in auto-reconnect is designed to ride out these transient drops and re-establish the link automatically.
+**This is a hardware/firmware limitation of the shared combo chip, not a fault in this plugin.** The built-in auto-reconnect is designed to ride out these transient drops and re-establish the link automatically. In addition, a **half-open watchdog** (`watchdog_enabled`, on by default) actively probes whether the phone is still reachable while the link *looks* up — and, once out of dry-run (`watchdog_dry_run = false`), resets Bluetooth to clear a half-open link that plain reconnect logic can't see. A truly *wedged* controller (won't re-power / repeated no-reply) is escalated to the opt-in recovery reboot (`reboot_on_stuck_bluetooth`), since only a power-cycle clears that.
 
 If the drops are frequent enough to be a problem, the options are all at the **OS/hardware level** (outside this plugin):
 
@@ -383,8 +391,18 @@ If the drops are frequent enough to be a problem, the options are all at the **O
 ### Bluetooth Service Unresponsive
 
 - The plugin automatically restarts hung Bluetooth services on startup
+- If the adapter goes unpowered (`br-connection-adapter-not-powered` /
+  `org.bluez.Error.NotReady` in the log), the plugin re-powers it in place
+  (`rfkill unblock` + `bluetoothctl power on`); if it stays down it's treated as
+  a wedged controller (see below), not silently retried forever
 - Manual restart: `sudo systemctl restart bluetooth`
 - Check logs: `pwnlog`
+
+> **Note:** a `systemctl restart bluetooth` does **not** clear a true controller
+> *wedge* (repeated no-reply, or an adapter that won't re-power) — only a
+> power-cycle does. Set `reboot_on_stuck_bluetooth = true` to let the plugin do
+> that automatically (loop-guarded); otherwise it surfaces `BT:Stuck-reboot` and
+> waits for you to reboot.
 
 ### Ghost Connections from Previous bt-tether Plugin
 

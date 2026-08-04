@@ -2,6 +2,33 @@
 
 All notable changes to the **bt-tether** plugin are documented here.
 
+## [1.4.3] - 2026-08-04
+
+### Added
+- **Half-open PAN link watchdog.** On a shared WiFi+BT combo chip the link can go
+  "half-open" — `bnep0` stays up and BlueZ still reports the device connected, but
+  Pi→phone traffic is dead — which plain reconnect logic can't detect. The
+  watchdog actively probes phone reachability (ping over the PAN iface, falling
+  back to the neighbour/ARP state) while the link *looks* connected, and after
+  `watchdog_fail_threshold` consecutive half-open reads resets Bluetooth to
+  self-heal. New options `watchdog_enabled` (default `true`), `watchdog_dry_run`
+  (default `true` — log only until you opt in), and `watchdog_fail_threshold`
+  (default `3`). Only probes while the phone is in range, so a phone that simply
+  walks away doesn't trip it.
+
+### Fixed
+- **A powered-off / `NotReady` adapter could hide a wedged controller forever.**
+  A BlueZ `br-connection-adapter-not-powered` (`org.bluez.Error.NotReady`) reply
+  was classified as a "fast, clean error", which reset the consecutive-abandon
+  streak on every monitor cycle — so once the controller went unpowered (e.g.
+  after WiFi/BT radio contention, or a manual `bluetooth` restart), the
+  wedged-controller detector could **never** trip and the monitor looped
+  indefinitely on a dead adapter. It's now treated as a fault: the plugin tries
+  to re-power the adapter in place (`rfkill unblock` + `bluetoothctl power on`,
+  the supported path — no deprecated `hciconfig`) and, if that keeps failing,
+  counts it toward the same stuck threshold so the existing recovery (message +
+  opt-in `reboot_on_stuck_bluetooth`) fires instead of hanging.
+
 ## [1.4.2] - 2026-06-17
 
 ### Added

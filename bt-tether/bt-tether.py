@@ -1140,7 +1140,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 class BTTetherHelper(Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.4.2"
+    __version__ = "1.4.3"
     __license__ = "GPL3"
     __description__ = "Guided Bluetooth tethering with user instructions"
 
@@ -1314,6 +1314,20 @@ class BTTetherHelper(Plugin):
         self.reboot_on_stuck_bluetooth = self.options.get(
             "reboot_on_stuck_bluetooth", False
         )
+
+        # ── Half-open PAN watchdog ──────────────────────────────────────────
+        # bnep0 can stay UP while the link is dead one direction: the phone's
+        # broadcasts still reach the Pi (so _pan_active() reports True and we
+        # think we're connected), but Pi->phone unicast fails (ARP INCOMPLETE).
+        # On a Pi Zero 2 W the onboard combo WiFi+BT chip causes this when
+        # pwnagotchi's WiFi recon starves Bluetooth. _pan_active() can't see it,
+        # so the watchdog actively probes peer reachability and resets Bluetooth
+        # to self-heal. Starts in dry-run (log only) so it can be observed first.
+        self.watchdog_enabled = self.options.get("watchdog_enabled", True)
+        self.watchdog_dry_run = self.options.get("watchdog_dry_run", True)
+        self.watchdog_fail_threshold = self.options.get("watchdog_fail_threshold", 3)
+        # Consecutive half-open detections; reset on a healthy probe.
+        self._half_open_count = 0
 
         # Set when a connect/reconnect attempt in flight should give up early
         # (user requested disconnect, or plugin is unloading). Checked by the
@@ -2372,6 +2386,16 @@ default-agent
 
                 # Update last known state (do this AFTER checking for changes)
                 self._last_known_connected = status["connected"]
+
+                # Watchdog: a half-open PAN link only matters while the phone is
+                # actually in BT range (BlueZ reports the device Connected). If it's
+                # out of range, bnep0 is just stale after a normal drop and the
+                # reconnect logic already handles it — so we DON'T reset here. This
+                # stops the watchdog firing every time the phone simply walks away.
+                if status["connected"]:
+                    self._check_half_open_link()
+                else:
+                    self._half_open_count = 0
 
                 # Only try to reconnect if device is BOTH paired AND trusted (and not blocked)
                 # Also check if we haven't exceeded max failures and user didn't manually disconnect
@@ -5056,6 +5080,138 @@ default-agent
             logging.error(f"[bt-tether] Internet check error: {e}")
             return False
 
+    def _pan_peer_ip(self, iface):
+        """Best-effort phone IP on the PAN link, for reachability probing.
+        Tries: default route via the iface -> existing neighbour -> our subnet .1."""
+        try:
+            out = subprocess.run(
+                ["ip", "route", "show", "default", "dev", iface],
+                capture_output=True, text=True, timeout=3,
+            ).stdout
+            m = re.search(r"default via (\d+\.\d+\.\d+\.\d+)", out)
+            if m:
+                return m.group(1)
+
+            out = subprocess.run(
+                ["ip", "neigh", "show", "dev", iface],
+                capture_output=True, text=True, timeout=3,
+            ).stdout
+            m = re.search(r"^(\d+\.\d+\.\d+\.\d+)", out.strip())
+            if m:
+                return m.group(1)
+
+            out = subprocess.run(
+                ["ip", "-4", "addr", "show", "dev", iface],
+                capture_output=True, text=True, timeout=3,
+            ).stdout
+            m = re.search(r"inet (\d+\.\d+\.\d+)\.\d+", out)
+            if m:
+                return m.group(1) + ".1"
+        except Exception as e:
+            logging.debug(f"[bt-tether] watchdog: peer IP probe failed: {e}")
+        return None
+
+    def _pan_peer_reachable(self):
+        """Probe whether the phone is actually reachable over the PAN link.
+        Returns True (reachable), False (half-open / unreachable), or None (unknown)."""
+        iface = self._get_pan_interface()
+        if not iface:
+            return None
+        peer = self._pan_peer_ip(iface)
+        if not peer:
+            return None
+        try:
+            r = subprocess.run(
+                ["ping", "-c", "1", "-W", "2", "-I", iface, peer],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=4,
+            )
+            if r.returncode == 0:
+                return True
+        except Exception:
+            pass
+        # Ping failed (or was filtered) — confirm via the neighbour state. A
+        # REACHABLE/STALE/DELAY entry means L2 is fine and ping is just blocked;
+        # INCOMPLETE/FAILED/absent means the link is genuinely half-open.
+        try:
+            out = subprocess.run(
+                ["ip", "neigh", "show", "to", peer, "dev", iface],
+                capture_output=True, text=True, timeout=3,
+            ).stdout
+            if any(s in out for s in ("REACHABLE", "STALE", "DELAY", "PROBE")):
+                return True
+        except Exception:
+            pass
+        return False
+
+    def _force_bluetooth_restart(self, reason=""):
+        """Unconditionally restart Bluetooth to clear a half-open/wedged link.
+        Unlike _restart_bluetooth_if_needed(), this does NOT require bluetoothctl
+        to be hung — a half-open link has a perfectly responsive controller."""
+        self._log("WARNING", f"Watchdog: resetting Bluetooth ({reason})")
+        try:
+            subprocess.run(
+                ["pkill", "-9", "bluetoothctl"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=self.SUBPROCESS_TIMEOUT_MEDIUM,
+            )
+        except Exception:
+            pass
+        try:
+            subprocess.run(
+                ["systemctl", "restart", "bluetooth"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=self.BLUETOOTH_RESTART_TIMEOUT,
+            )
+        except subprocess.TimeoutExpired:
+            self._log("INFO", "Watchdog: bluetooth restart still settling...")
+        except Exception as e:
+            self._log("ERROR", f"Watchdog: bluetooth restart failed: {e}")
+            return False
+        self._wait_for_bluetooth_ready(timeout=self.SUBPROCESS_TIMEOUT_LONG)
+        self._log("INFO", "Watchdog: Bluetooth reset done; link will re-establish")
+        return True
+
+    def _check_half_open_link(self):
+        """Detect a half-open PAN link (bnep up but phone unreachable) and reset
+        Bluetooth to recover. No-op unless a PAN interface is up. Honours dry-run."""
+        if not self.watchdog_enabled:
+            return
+        if not self._pan_active():
+            self._half_open_count = 0
+            return
+
+        reachable = self._pan_peer_reachable()
+        if reachable is None:
+            return  # couldn't determine a peer to probe — don't act
+        if reachable:
+            if self._half_open_count:
+                self._log("DEBUG", "Watchdog: PAN link healthy again")
+            self._half_open_count = 0
+            return
+
+        # bnep up but phone unreachable -> half-open
+        self._half_open_count += 1
+        self._log(
+            "WARNING",
+            f"Watchdog: PAN link looks half-open (bnep up, phone unreachable) "
+            f"[{self._half_open_count}/{self.watchdog_fail_threshold}]",
+        )
+        if self._half_open_count < self.watchdog_fail_threshold:
+            return
+
+        self._half_open_count = 0
+        if self.watchdog_dry_run:
+            self._log(
+                "WARNING",
+                "Watchdog: DRY-RUN — would reset Bluetooth now to clear the "
+                "half-open link (set watchdog_dry_run = false to enable healing)",
+            )
+            return
+
+        with self.lock:
+            self._last_known_connected = False
+        self._force_bluetooth_restart(reason="half-open PAN link")
+
     def _pan_active(self):
         """Check if any PAN interface (bnep/bt-pan) is active - optimized for RPi Zero W2"""
         try:
@@ -5701,6 +5857,47 @@ default-agent
         self._wait_for_bluetooth_ready(timeout=self.SUBPROCESS_TIMEOUT_LONG)
         self._consecutive_busy = 0
 
+    def _handle_adapter_not_powered(self):
+        """The BT adapter reported NotReady / 'not powered' - our own controller
+        is down (often a wedge after WiFi/BT radio contention), not the phone. Try
+        to re-power it in place; if it keeps failing, count it toward the stuck
+        threshold so _handle_bt_stuck() (and the opt-in recovery reboot) can fire
+        instead of the monitor looping forever on a dead adapter.
+        """
+        self._consecutive_abandons += 1
+        self._log(
+            "WARNING",
+            f"BT adapter not powered (controller down) - re-powering "
+            f"[{self._consecutive_abandons}/{self.BT_STUCK_THRESHOLD}]",
+        )
+        try:
+            # rfkill clears a soft block; bluetoothctl re-powers the adapter via
+            # BlueZ (the supported path - avoids the deprecated hciconfig/hcitool).
+            subprocess.run(
+                ["rfkill", "unblock", "bluetooth"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            subprocess.run(
+                ["bluetoothctl", "power", "on"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=8,
+            )
+        except subprocess.TimeoutExpired:
+            self._log(
+                "WARNING",
+                "Re-power timed out - controller likely wedged (needs a power-cycle)",
+            )
+        except Exception as e:
+            self._log("WARNING", f"Adapter re-power attempt failed: {e}")
+
+        # A power toggle can't fix a truly wedged controller - escalate to the
+        # same path repeated no-reply uses (surface it, and reboot if opted in).
+        if self._consecutive_abandons >= self.BT_STUCK_THRESHOLD:
+            self._handle_bt_stuck()
+
     def _handle_bt_stuck(self):
         """Repeated no-reply abandons => the BT controller looks wedged.
 
@@ -5862,16 +6059,33 @@ default-agent
                 self._ever_connected = True
                 return True
 
-            # Any fast/clean error means BlueZ responded (not a wedge) - reset the
-            # abandon streak so only genuinely consecutive NoReply abandons count.
-            self._consecutive_abandons = 0
-
-            # Re-raise non-DBus errors to the outer handler
+            # Re-raise non-DBus errors to the outer handler (not a clean BlueZ
+            # reply, so don't reset the abandon streak here).
             if not isinstance(dbus_err, dbus.exceptions.DBusException):
                 raise dbus_err
 
+            error_msg = str(dbus_err)
+
+            # An unpowered / NotReady adapter is NOT a clean "phone unreachable"
+            # reply - it means our OWN controller is down (typically a wedge after
+            # WiFi/BT radio contention). Treat it as a fault: re-power the adapter
+            # in place and count it toward the stuck threshold so the recovery path
+            # can fire, instead of resetting the streak (which masks the wedge and
+            # loops forever on a dead adapter).
+            if (
+                "br-connection-adapter-not-powered" in error_msg
+                or "org.bluez.Error.NotReady" in error_msg
+                or "not powered" in error_msg.lower()
+            ):
+                self._handle_adapter_not_powered()
+                return False
+
+            # Any other fast/clean error means BlueZ responded (not a wedge) -
+            # reset the abandon streak so only genuinely consecutive NoReply
+            # abandons count.
+            self._consecutive_abandons = 0
+
             try:
-                error_msg = str(dbus_err)
                 logging.error(f"[bt-tether] DBus NAP connection failed: {dbus_err}")
 
                 # Classify the failure for the UI / recovery logic
