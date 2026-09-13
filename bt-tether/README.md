@@ -1,5 +1,7 @@
 # bt-tether (v1.4.2)
 
+> **🎉 Now part of Pwnagotchi core!** As of **Pwnagotchi 2.9.5.8**, this plugin is bundled with Pwnagotchi itself, so you no longer need to install it manually on that release (or newer). The standalone copy in this repo remains available for older Pwnagotchi versions and for anyone who wants to track/patch it independently.
+
 > **ℹ️ Note:** This plugin is a full replacement for the default [bt-tether.py](https://github.com/jayofelony/pwnagotchi/blob/noai/pwnagotchi/plugins/default/bt-tether.py) shipped with Pwnagotchi. It is not a helper or add-on for that plugin, but a standalone alternative with expanded features and improved reliability.
 >
 > **⚠️ Warning:** Do not enable both this plugin and the default bt-tether.py at the same time. Only one Bluetooth tethering plugin should be active to avoid conflicts.
