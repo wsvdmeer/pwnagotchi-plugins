@@ -36,6 +36,20 @@ Simple plugin to display the **current time and date** (from the OS system clock
 
 ---
 
+### 🔋 waveshare-ups
+
+Battery gauge for the **Waveshare UPS HAT (C)**, reading the on-board INA219 fuel gauge over I²C.
+
+- 🔋 **Battery icon + %** on the e-ink screen (compact segmented battery glyph, or plain `BAT` text)
+- ⚡ **Charging detection** — shows a `+` when the pack is charging
+- 📈 **Smoothed reading** via an interpolated Li-ion curve, instead of coarse voltage steps
+- 🩹 **Self-healing I²C init** — retries if the HAT isn't ready at boot instead of getting stuck on `--%`
+- 🛠️ **Configurable** icon style, orientation, segments, position, and thresholds (optional safe shutdown)
+
+**[📖 Full documentation →](waveshare-ups/README.md)**
+
+---
+
 ## 🚀 Quick Start
 
 For any plugin, copy to your custom plugins directory and enable in config:
