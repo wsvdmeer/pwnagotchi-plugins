@@ -15,11 +15,36 @@ Comprehensive **Bluetooth tethering plugin** with web interface for managing int
 - 📊 **On-screen status** indicators with connection details
 - 🔍 **Device scanning** and auto-discovery
 - 🔄 **Auto-reconnect** with intelligent failure handling
-- 🎮 **Discord notifications** (optional)
+- 📣 **Connect/disconnect notifications** via optional Discord & Telegram companion plugins (below)
 
 **[📖 Full documentation →](bt-tether/README.md)**
 
 > **Note:** Previously named `bt-tether-helper`. See [migration guide](bt-tether-helper/README.md) for old links.
+
+---
+
+### 🎮 bt-tether-discord
+
+Companion plugin that posts a **Discord** notification when Bluetooth tethering connects or disconnects.
+
+- 🔔 Listens to `bt-tether`'s connect/disconnect events and posts a formatted webhook embed (blue on connect, red on disconnect)
+- 🌐 Includes device, interface, and IP (IPv4 + IPv6 when available)
+- 🧵 **Non-blocking**: the webhook POST runs on a background thread, so a slow/unreachable Discord endpoint never stalls `bt-tether`
+- 🔁 **Debounced** (30 s) to avoid spam from reconnect churn
+
+**[📖 Full documentation →](bt-tether-discord/README.md)**
+
+---
+
+### ✈️ bt-tether-telegram
+
+Companion plugin that sends a **Telegram** message when Bluetooth tethering connects or disconnects.
+
+- 🔔 Listens to `bt-tether`'s connect/disconnect events
+- 🌐 Includes device info and IP (IPv4 + IPv6 when available), plus a link to the Pwnagotchi web UI
+- 🧵 **Non-blocking**: the API call runs on a background thread, so a slow/unreachable Telegram endpoint never stalls `bt-tether`
+
+**[📖 Full documentation →](bt-tether-telegram/README.md)**
 
 ---
 
