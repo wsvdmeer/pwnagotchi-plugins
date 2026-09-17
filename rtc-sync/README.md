@@ -1,4 +1,4 @@
-# rtc-sync (v1.0.0)
+# rtc-sync (v1.1.0)
 
 Keeps the Pwnagotchi system clock in sync with a hardware **DS3231 / DS1307**
 RTC over I²C — **no kernel RTC driver or device-tree overlay required**. It
@@ -21,6 +21,9 @@ brings the network up.
   after (once NTP has likely landed), persists the fresh time to the RTC.
 - 🌍 **UTC in the RTC** — stores UTC on the chip regardless of the Pi's
   timezone, so it round-trips cleanly.
+- 🔌 **Disables the DS3231's unused 32kHz output** (a tiny power saving),
+  redone each boot since it resets after a power loss. DS3231-only, guarded by
+  a chip check so it never touches a DS1307's RAM.
 
 ## Hardware
 
@@ -62,6 +65,7 @@ min_valid_year = 2024                # clock/RTC below this is treated as invali
 sync_interval = 3600                 # seconds between RTC writes (default 1 h)
 post_connect_delay = 20              # seconds to wait after bt-tether connects
                                      # before writing the RTC (let NTP land)
+disable_32khz = true                 # DS3231 only: turn off the unused 32kHz pin
 ```
 
 ### Notes

@@ -15,7 +15,8 @@ class DS3231:
 
     # register map (DS1307/DS3231 share the time registers)
     REG_SECONDS = 0x00
-    REG_STATUS = 0x0F  # DS3231 status; bit7 = OSF (oscillator stopped)
+    REG_STATUS = 0x0F   # DS3231 status; bit7 = OSF, bit3 = EN32kHz
+    REG_TEMP_MSB = 0x11  # DS3231 only (DS1307 has RAM here)
 
     def __init__(self, i2c_bus=1, addr=0x68):
         import smbus
@@ -45,6 +46,34 @@ class DS3231:
         except Exception:
             pass  # DS1307 has no status register; harmless
 
+    def read_temperature(self):
+        """DS3231 on-chip temperature in °C (meaningless on a DS1307)."""
+        msb = self.bus.read_byte_data(self.addr, self.REG_TEMP_MSB)
+        lsb = self.bus.read_byte_data(self.addr, self.REG_TEMP_MSB + 1)
+        if msb > 127:
+            msb -= 256
+        return msb + (lsb >> 6) * 0.25
+
+    def is_ds3231(self):
+        """Best-effort check that this really is a DS3231 (and not a DS1307,
+        whose 0x0F/0x11 are general-purpose RAM). The temperature register
+        reads a plausible value on a DS3231; on a DS1307 it's arbitrary RAM."""
+        try:
+            t = self.read_temperature()
+            return -45.0 <= t <= 100.0
+        except Exception:
+            return False
+
+    def disable_32khz(self):
+        """Turn off the DS3231's unused 32kHz output (status bit3). Returns
+        True if it was on and got cleared. DS3231-only — never call on a
+        DS1307, where 0x0F is RAM."""
+        st = self.bus.read_byte_data(self.addr, self.REG_STATUS)
+        if st & 0x08:
+            self.bus.write_byte_data(self.addr, self.REG_STATUS, st & ~0x08)
+            return True
+        return False
+
     def read_utc(self):
         """Return the RTC time as a UTC time.struct_time."""
         r = self.bus.read_i2c_block_data(self.addr, self.REG_SECONDS, 7)
@@ -73,9 +102,9 @@ class DS3231:
 
 class RTCSync(plugins.Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.0.0"
+    __version__ = "1.1.0"
     __license__ = "GPL3"
-    __description__ = "Keeps the system clock in sync with a DS3231/DS1307 RTC: restore time at boot, persist good time back to the RTC (no kernel overlay needed)."
+    __description__ = "Keeps the system clock in sync with a DS3231/DS1307 RTC: restore time at boot, persist good time back to the RTC (no kernel overlay needed), and turn off the DS3231's unused 32kHz output."
 
     def __init__(self):
         self.rtc = None
@@ -148,6 +177,19 @@ class RTCSync(plugins.Plugin):
             return
 
         logging.info("[rtc-sync] plugin loaded")
+
+        # Turn off the DS3231's unused 32kHz output to save a little power.
+        # EN32kHz defaults back to on after a power loss, so we redo it each
+        # boot. Guarded by a DS3231 check so it never touches a DS1307's RAM.
+        if self._opt("disable_32khz", True):
+            try:
+                if self.rtc.is_ds3231():
+                    if self.rtc.disable_32khz():
+                        logging.info("[rtc-sync] disabled unused DS3231 32kHz output")
+                else:
+                    logging.debug("[rtc-sync] not a DS3231; leaving 32kHz alone")
+            except Exception as e:
+                logging.debug("[rtc-sync] 32kHz disable skipped: %s", e)
 
         # At boot: if the system clock is not yet set (offline) but the RTC
         # holds a valid time, restore it from the RTC.
