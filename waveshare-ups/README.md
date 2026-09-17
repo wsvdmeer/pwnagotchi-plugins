@@ -1,4 +1,4 @@
-# waveshare-ups (v1.2.0)
+# waveshare-ups (v1.3.0)
 
 Battery percentage display for the **Waveshare UPS HAT (C)** on Pwnagotchi, using
 the on-board INA219 fuel-gauge over I²C.
@@ -15,7 +15,8 @@ boot — so it doesn't get stuck showing `--%`.
 - **Charging detection**: reads INA219 current; appends `+` while the pack is charging (positive current)
 - **Self-driven refresh**: a background thread refreshes the reading and forces a screen redraw **only when the value changes**, so the battery updates on its own even when `ui.fps = 0` (the default) leaves the rest of the screen static — without wasting e-ink refreshes
 - **Self-healing init**: if the I²C bus/device isn't ready when the plugin loads, it keeps retrying (rate-limited) rather than dying on the first failure
-- **Configurable**: I²C bus/address, icon style/orientation/segments, screen position, update interval, and thresholds
+- **Web history chart**: a page at `/plugins/waveshare-ups` plots charge % over time (discharging vs charging), backed by a small persisted ring buffer that survives reboots
+- **Configurable**: I²C bus/address, icon style/orientation/segments, screen position, update interval, thresholds, and history sampling
 - **Optional safe shutdown** at a critical charge level (opt-in, off by default)
 - **Well-behaved**: does not force the pwnagotchi face expression
 
@@ -66,6 +67,12 @@ update_interval = 10      # seconds between reads
 smoothing = 3             # rolling-average window over readings (1 = off)
 show_voltage = false      # show "3.94V" instead of "%" (ignored while charging)
 
+# History / web chart
+history_enabled = true    # record charge history for the web page
+history_interval = 300    # seconds between recorded samples (default 5 min)
+history_max = 288         # samples to keep (288 × 5 min ≈ 24 h)
+# history_file = "/etc/pwnagotchi/waveshare-ups-history.json"  # persistence path
+
 # Charging / thresholds
 charge_current_ma = 15    # current above this (mA) counts as "charging"
 low_battery = 10          # log a warning at/below this %
@@ -104,6 +111,17 @@ reading is noisy. This plugin:
 
 It's an estimate, not a coulomb counter — expect a few percent of drift,
 especially under heavy recon load.
+
+## Web interface
+
+Open **`http://<pwnagotchi-ip>:8080/plugins/waveshare-ups`** for a battery
+history chart: charge % over time, with charging stretches drawn in green and
+discharging in blue, plus the current charge, voltage, and state. The page
+auto-refreshes every 30 s and reads from `GET /plugins/waveshare-ups/data`
+(JSON), which you can also poll from your own tooling.
+
+History is sampled every `history_interval` seconds, capped at `history_max`
+samples, and persisted to `history_file` so it survives reboots.
 
 ## Troubleshooting
 

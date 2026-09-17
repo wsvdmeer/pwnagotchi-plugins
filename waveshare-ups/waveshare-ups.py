@@ -1,4 +1,6 @@
+import json
 import logging
+import os
 import threading
 import time
 
@@ -6,6 +8,12 @@ import pwnagotchi.plugins as plugins
 import pwnagotchi.ui.fonts as fonts
 from pwnagotchi.ui.components import LabeledValue, Widget
 from pwnagotchi.ui.view import BLACK
+
+try:
+    from flask import jsonify, render_template_string
+except Exception:  # flask always present under pwnagotchi's web UI, but be safe
+    jsonify = None
+    render_template_string = None
 
 # INA219 register map
 _REG_CONFIG = 0x00
@@ -228,9 +236,9 @@ class BatteryGauge(Widget):
 
 class WaveshareUPS(plugins.Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.2.0"
+    __version__ = "1.3.0"
     __license__ = "GPL3"
-    __description__ = "Battery gauge for the Waveshare UPS HAT (C): segmented battery icon, charging detection, self-healing I2C init, self-driven refresh."
+    __description__ = "Battery gauge for the Waveshare UPS HAT (C): segmented battery icon, charging detection, self-healing I2C init, self-driven refresh, and a web history chart."
 
     def __init__(self):
         self.ina = None
@@ -245,6 +253,11 @@ class WaveshareUPS(plugins.Plugin):
         self._lock = threading.Lock()
         self._worker = None
         self._running = False
+        # battery history (for the web chart)
+        self._history = []
+        self._hist_lock = threading.Lock()
+        self._last_sample = 0
+        self._last = {"percent": None, "voltage": None, "charging": False}
 
     # ---- config helpers ---------------------------------------------------
 
@@ -297,10 +310,58 @@ class WaveshareUPS(plugins.Plugin):
             self._samples = self._samples[-window:]
         return sum(self._samples) / len(self._samples)
 
+    # ---- history ----------------------------------------------------------
+
+    def _history_file(self):
+        return self._opt("history_file", "/etc/pwnagotchi/waveshare-ups-history.json")
+
+    def _load_history(self):
+        try:
+            with open(self._history_file()) as fh:
+                data = json.load(fh)
+            if isinstance(data, list):
+                with self._hist_lock:
+                    self._history = data[-int(self._opt("history_max", 288)):]
+                logging.info(
+                    "[waveshare-ups] loaded %d history samples", len(self._history)
+                )
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logging.debug("[waveshare-ups] could not load history: %s", e)
+
+    def _persist_history(self):
+        path = self._history_file()
+        try:
+            tmp = path + ".tmp"
+            with self._hist_lock:
+                snapshot = list(self._history)
+            with open(tmp, "w") as fh:
+                json.dump(snapshot, fh)
+            os.replace(tmp, path)
+        except Exception as e:
+            logging.debug("[waveshare-ups] could not persist history: %s", e)
+
+    def _record(self, percent, charging, voltage):
+        if not self._opt("history_enabled", True):
+            return
+        now = time.time()
+        if now - self._last_sample < int(self._opt("history_interval", 300)):
+            return
+        self._last_sample = now
+        sample = [int(now), int(percent), 1 if charging else 0, round(voltage, 3)]
+        with self._hist_lock:
+            self._history.append(sample)
+            cap = int(self._opt("history_max", 288))
+            if len(self._history) > cap:
+                self._history = self._history[-cap:]
+        self._persist_history()
+
     # ---- plugin lifecycle -------------------------------------------------
 
     def on_loaded(self):
         logging.info("[waveshare-ups] plugin loaded")
+        self._load_history()
         self._try_init()  # best-effort; on_ui_update retries if this fails
 
     def on_ui_setup(self, ui):
@@ -410,6 +471,12 @@ class WaveshareUPS(plugins.Plugin):
                 elif percent <= low and not charging:
                     logging.info("[waveshare-ups] battery low: %d%%", percent)
 
+                self._last = {
+                    "percent": percent,
+                    "voltage": round(voltage, 3),
+                    "charging": charging,
+                }
+                self._record(percent, charging, voltage)
                 return self._apply_text(ui, text, percent, charging)
 
             except Exception as e:
@@ -429,6 +496,31 @@ class WaveshareUPS(plugins.Plugin):
             return True
         return False
 
+    # ---- web UI -----------------------------------------------------------
+
+    def on_webhook(self, path, request):
+        if render_template_string is None:
+            return "flask unavailable", 500
+
+        clean = (path or "").lstrip("/")
+
+        if clean == "data":
+            with self._hist_lock:
+                samples = list(self._history)
+            return jsonify(
+                {
+                    "samples": samples,   # [ts, percent, charging(0/1), voltage]
+                    "current": self._last,
+                    "interval": int(self._opt("history_interval", 300)),
+                    "version": self.__version__,
+                }
+            )
+
+        if not clean:
+            return render_template_string(_WEB_PAGE, version=self.__version__)
+
+        return "not found", 404
+
     def on_unload(self, ui):
         self._running = False
         try:
@@ -436,3 +528,116 @@ class WaveshareUPS(plugins.Plugin):
                 ui.remove_element("ups")
         except Exception:
             pass
+
+
+_WEB_PAGE = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UPS Battery</title>
+<style>
+  :root { --bg:#f5f6f8; --card:#fff; --fg:#1c1e21; --muted:#6b7280;
+          --line:#2563eb; --charge:#16a34a; --grid:#e5e7eb; --border:#e5e7eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f1115; --card:#171a21; --fg:#e6e8eb; --muted:#9aa1ac;
+            --line:#60a5fa; --charge:#4ade80; --grid:#252a33; --border:#252a33; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; }
+  .wrap { max-width:900px; margin:0 auto; padding:20px; }
+  h1 { font-size:18px; margin:0 0 2px; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:16px; }
+  .cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
+          padding:12px 16px; flex:1; min-width:120px; }
+  .k { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
+  .v { font-size:24px; font-weight:650; margin-top:2px; }
+  .chartcard { background:var(--card); border:1px solid var(--border);
+               border-radius:12px; padding:12px; }
+  canvas { width:100%; height:260px; display:block; }
+  .foot { color:var(--muted); font-size:11px; margin-top:10px; text-align:right; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%;
+         vertical-align:middle; margin-right:5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🔋 UPS Battery</h1>
+  <div class="sub">Waveshare UPS HAT (C) · plugin v{{ version }}</div>
+  <div class="cards">
+    <div class="card"><div class="k">Charge</div><div class="v" id="pct">–</div></div>
+    <div class="card"><div class="k">Voltage</div><div class="v" id="volt">–</div></div>
+    <div class="card"><div class="k">State</div><div class="v" id="state">–</div></div>
+    <div class="card"><div class="k">Window</div><div class="v" id="span">–</div></div>
+  </div>
+  <div class="chartcard">
+    <canvas id="c"></canvas>
+    <div class="foot">
+      <span class="dot" style="background:var(--line)"></span>discharging
+      <span class="dot" style="background:var(--charge); margin-left:12px"></span>charging
+      · auto-refresh 30s
+    </div>
+  </div>
+</div>
+<script>
+const cvs = document.getElementById('c');
+const ctx = cvs.getContext('2d');
+function css(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function fmtAge(sec){
+  if(sec < 3600) return Math.round(sec/60)+'m';
+  if(sec < 86400) return (sec/3600).toFixed(1)+'h';
+  return (sec/86400).toFixed(1)+'d';
+}
+function draw(samples){
+  const dpr = window.devicePixelRatio || 1;
+  const W = cvs.clientWidth, H = cvs.clientHeight;
+  cvs.width = W*dpr; cvs.height = H*dpr; ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,W,H);
+  const padL=32, padR=10, padT=10, padB=22;
+  const x0=padL, x1=W-padR, y0=padT, y1=H-padB;
+  const grid=css('--grid'), muted=css('--muted');
+  ctx.strokeStyle=grid; ctx.fillStyle=muted; ctx.lineWidth=1;
+  ctx.font='10px sans-serif'; ctx.textBaseline='middle';
+  for(let p=0;p<=100;p+=25){
+    const y=y1-(y1-y0)*p/100;
+    ctx.beginPath(); ctx.moveTo(x0,y); ctx.lineTo(x1,y); ctx.stroke();
+    ctx.fillText(p+'%', 4, y);
+  }
+  if(!samples.length) return;
+  const t0=samples[0][0], t1=Math.max(samples[samples.length-1][0], t0+1);
+  const sx=t=>x0+(x1-x0)*(t-t0)/(t1-t0);
+  const sy=p=>y1-(y1-y0)*Math.max(0,Math.min(100,p))/100;
+  const cLine=css('--line'), cChg=css('--charge');
+  ctx.lineWidth=2; ctx.lineJoin='round';
+  for(let i=1;i<samples.length;i++){
+    const a=samples[i-1], b=samples[i];
+    ctx.strokeStyle = b[2] ? cChg : cLine;
+    ctx.beginPath(); ctx.moveTo(sx(a[0]),sy(a[1])); ctx.lineTo(sx(b[0]),sy(b[1])); ctx.stroke();
+  }
+}
+async function tick(){
+  try{
+    const r = await fetch('/plugins/waveshare-ups/data', {cache:'no-store'});
+    const d = await r.json();
+    const s = d.samples||[];
+    const cur = d.current||{};
+    document.getElementById('pct').textContent =
+      (cur.percent==null?'–':cur.percent+'%') + (cur.charging?' ⚡':'');
+    document.getElementById('volt').textContent =
+      (cur.voltage==null?'–':cur.voltage.toFixed(2)+' V');
+    document.getElementById('state').textContent =
+      cur.charging ? 'Charging' : (cur.percent==null?'–':'Discharging');
+    document.getElementById('span').textContent =
+      s.length>1 ? fmtAge(s[s.length-1][0]-s[0][0]) : '–';
+    draw(s);
+  }catch(e){ /* keep last render */ }
+}
+tick(); setInterval(tick, 30000);
+window.addEventListener('resize', tick);
+</script>
+</body>
+</html>
+"""
