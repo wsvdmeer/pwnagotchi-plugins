@@ -1,3 +1,4 @@
+import calendar
 import logging
 import subprocess
 import threading
@@ -102,9 +103,9 @@ class DS3231:
 
 class RTCSync(plugins.Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.1.0"
+    __version__ = "1.2.0"
     __license__ = "GPL3"
-    __description__ = "Keeps the system clock in sync with a DS3231/DS1307 RTC: restore time at boot, persist good time back to the RTC (no kernel overlay needed), and turn off the DS3231's unused 32kHz output."
+    __description__ = "Keeps the system clock in sync with a DS3231/DS1307 RTC: restore time at boot (trusting whichever clock is ahead), persist fresh time back to the RTC (no kernel overlay needed), and turn off the DS3231's unused 32kHz output."
 
     def __init__(self):
         self.rtc = None
@@ -136,6 +137,15 @@ class RTCSync(plugins.Plugin):
             return self.rtc.read_utc().tm_year >= self._min_year()
         except Exception:
             return False
+
+    def _rtc_epoch(self):
+        try:
+            return calendar.timegm(self.rtc.read_utc())  # RTC holds UTC
+        except Exception:
+            return None
+
+    def _min_diff(self):
+        return int(self._opt("min_diff_seconds", 10))
 
     def _set_system_from_rtc(self):
         try:
@@ -191,16 +201,12 @@ class RTCSync(plugins.Plugin):
             except Exception as e:
                 logging.debug("[rtc-sync] 32kHz disable skipped: %s", e)
 
-        # At boot: if the system clock is not yet set (offline) but the RTC
-        # holds a valid time, restore it from the RTC.
+        # At boot restore the clock from the RTC when the RTC is the more
+        # trustworthy source. After a reboot the system clock falls back to
+        # fake-hwclock, which is "plausible" (right year) but stale, while a
+        # battery-backed RTC kept real time — so trust whichever is *ahead*.
         if self._opt("set_system_from_rtc_on_boot", True):
-            if not self._system_time_is_good() and self._rtc_time_is_good():
-                self._set_system_from_rtc()
-            elif self.rtc.oscillator_stopped():
-                logging.info(
-                    "[rtc-sync] RTC oscillator flag set (time invalid); "
-                    "will write it once the system clock is good"
-                )
+            self._boot_restore()
 
         self._running = True
         self._worker = threading.Thread(
@@ -208,12 +214,51 @@ class RTCSync(plugins.Plugin):
         )
         self._worker.start()
 
+    def _boot_restore(self):
+        if not self._rtc_time_is_good():
+            if self.rtc.oscillator_stopped():
+                logging.info(
+                    "[rtc-sync] RTC time invalid (OSF set); will seed it once "
+                    "the system clock is good"
+                )
+            return
+        rtc_e = self._rtc_epoch()
+        if rtc_e is None:
+            return
+        delta = rtc_e - time.time()  # how far the RTC is ahead of the system
+        if not self._system_time_is_good():
+            self._set_system_from_rtc()
+        elif delta > self._min_diff():
+            logging.info(
+                "[rtc-sync] system clock was stale (RTC ahead %ds); restoring from RTC",
+                int(delta),
+            )
+            self._set_system_from_rtc()
+        else:
+            logging.info(
+                "[rtc-sync] system clock already current (RTC delta %ds)", int(delta)
+            )
+
+    def _maybe_write_rtc(self):
+        """Persist system time to the RTC only when the system is the fresher
+        source (e.g. just got NTP) — never overwrite a good RTC with a stale
+        fake-hwclock time."""
+        if not self._opt("write_rtc_when_synced", True) or self.rtc is None:
+            return
+        if not self._system_time_is_good():
+            return
+        if not self._rtc_time_is_good():
+            self._write_rtc_from_system()  # seed / recover an invalid RTC
+            return
+        rtc_e = self._rtc_epoch()
+        if rtc_e is not None and (time.time() - rtc_e) > self._min_diff():
+            self._write_rtc_from_system()  # system is ahead -> it's fresher
+
     def _sync_loop(self):
         interval = max(60, int(self._opt("sync_interval", 3600)))
         while self._running:
             try:
-                if self._opt("write_rtc_when_synced", True) and self._system_time_is_good():
-                    self._write_rtc_from_system()
+                self._maybe_write_rtc()
             except Exception as e:
                 logging.debug("[rtc-sync] sync loop: %s", e)
             for _ in range(interval):
@@ -223,14 +268,13 @@ class RTCSync(plugins.Plugin):
 
     def on_bt_tether_connected(self, agent, event_data):
         """When tethering comes up the OS usually gets NTP shortly after —
-        persist that good time to the RTC (best-effort, non-blocking)."""
+        persist that fresh time to the RTC (best-effort, non-blocking)."""
         if self.rtc is None or not self._opt("write_rtc_when_synced", True):
             return
 
         def _later():
             time.sleep(int(self._opt("post_connect_delay", 20)))
-            if self._system_time_is_good():
-                self._write_rtc_from_system()
+            self._maybe_write_rtc()
 
         threading.Thread(target=_later, name="rtc-sync-onconnect", daemon=True).start()
 

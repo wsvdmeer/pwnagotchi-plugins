@@ -1,4 +1,4 @@
-# rtc-sync (v1.1.0)
+# rtc-sync (v1.2.0)
 
 Keeps the Pwnagotchi system clock in sync with a hardware **DS3231 / DS1307**
 RTC over I²C — **no kernel RTC driver or device-tree overlay required**. It
@@ -13,10 +13,15 @@ brings the network up.
 
 ## What it does
 
-- 🕓 **Boot restore** — if the system clock isn't set yet but the RTC holds a
-  valid time, sets the system clock from the RTC (UTC).
-- 💾 **Persist** — periodically writes the system time to the RTC once the clock
-  is trustworthy, and clears the DS3231 **oscillator-stopped (OSF)** flag.
+- 🕓 **Boot restore (ahead wins)** — at boot the system clock falls back to
+  `fake-hwclock`, which looks plausible (right year) but is *stale*, while a
+  battery-backed RTC kept real time. So it trusts **whichever clock is ahead**:
+  if the RTC leads the system by more than `min_diff_seconds`, it restores the
+  system clock from the RTC.
+- 💾 **Persist (only when fresher)** — writes the system time to the RTC only
+  when the system is meaningfully **ahead** of the RTC (e.g. just got NTP), so a
+  stale `fake-hwclock` time never overwrites a good RTC. Also clears the DS3231
+  **oscillator-stopped (OSF)** flag.
 - 🔗 **Tether-aware** — listens for `bt_tether_connected` and, a short while
   after (once NTP has likely landed), persists the fresh time to the RTC.
 - 🌍 **UTC in the RTC** — stores UTC on the chip regardless of the Pi's
@@ -62,6 +67,8 @@ i2c_address = "0x68"              # DS3231/DS1307 address (string or decimal)
 set_system_from_rtc_on_boot = true  # restore clock from RTC at boot
 write_rtc_when_synced = true         # persist good system time to the RTC
 min_valid_year = 2024                # clock/RTC below this is treated as invalid
+min_diff_seconds = 10                # how far one clock must lead the other
+                                     # before restoring/writing (avoids churn)
 sync_interval = 3600                 # seconds between RTC writes (default 1 h)
 post_connect_delay = 20              # seconds to wait after bt-tether connects
                                      # before writing the RTC (let NTP land)
