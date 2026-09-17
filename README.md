@@ -68,10 +68,26 @@ Battery gauge for the **Waveshare UPS HAT (C)**, reading the on-board INA219 fue
 - 🔋 **Battery icon + %** on the e-ink screen (compact segmented battery glyph, or plain `BAT` text)
 - ⚡ **Charging detection** — shows a `+` when the pack is charging
 - 📈 **Smoothed reading** via an interpolated Li-ion curve, instead of coarse voltage steps
+- 📊 **Web history chart** at `/plugins/waveshare-ups` — charge % over time, persisted across reboots
 - 🩹 **Self-healing I²C init** — retries if the HAT isn't ready at boot instead of getting stuck on `--%`
 - 🛠️ **Configurable** icon style, orientation, segments, position, and thresholds (optional safe shutdown)
 
 **[📖 Full documentation →](waveshare-ups/README.md)**
+
+---
+
+### 🛰️ rtc-sync
+
+Keeps the system clock correct across reboots using a hardware **DS3231 / DS1307 RTC** — no kernel overlay or `hwclock` needed.
+
+- 🕓 **Restores the clock from the RTC at boot** (so time is right even offline)
+- 💾 **Persists good system time back to the RTC** and clears the DS3231 oscillator-stopped flag
+- 🔗 **Tether-aware** — re-syncs the RTC shortly after `bt-tether` brings the network up (NTP)
+- 🌍 Stores **UTC** on the chip, timezone-independent
+
+**[📖 Full documentation →](rtc-sync/README.md)**
+
+> Pairs with `rtc-datetime` (which *displays* the clock) — this one keeps the underlying clock accurate.
 
 ---
 
