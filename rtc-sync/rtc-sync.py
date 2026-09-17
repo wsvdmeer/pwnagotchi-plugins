@@ -103,7 +103,7 @@ class DS3231:
 
 class RTCSync(plugins.Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.2.0"
+    __version__ = "1.0.0"
     __license__ = "GPL3"
     __description__ = "Keeps the system clock in sync with a DS3231/DS1307 RTC: restore time at boot (trusting whichever clock is ahead), persist fresh time back to the RTC (no kernel overlay needed), and turn off the DS3231's unused 32kHz output."
 

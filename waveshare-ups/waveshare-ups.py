@@ -236,7 +236,7 @@ class BatteryGauge(Widget):
 
 class WaveshareUPS(plugins.Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.3.0"
+    __version__ = "1.0.0"
     __license__ = "GPL3"
     __description__ = "Battery gauge for the Waveshare UPS HAT (C): segmented battery icon, charging detection, self-healing I2C init, self-driven refresh, and a web history chart."
 

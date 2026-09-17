@@ -1,4 +1,4 @@
-# rtc-sync (v1.2.0)
+# rtc-sync (v1.0.0)
 
 Keeps the Pwnagotchi system clock in sync with a hardware **DS3231 / DS1307**
 RTC over I²C — **no kernel RTC driver or device-tree overlay required**. It

@@ -1,4 +1,4 @@
-# waveshare-ups (v1.3.0)
+# waveshare-ups (v1.0.0)
 
 Battery percentage display for the **Waveshare UPS HAT (C)** on Pwnagotchi, using
 the on-board INA219 fuel-gauge over I²C.
