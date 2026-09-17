@@ -224,7 +224,7 @@ class RTCSync(plugins.Plugin):
     def on_bt_tether_connected(self, agent, event_data):
         """When tethering comes up the OS usually gets NTP shortly after —
         persist that good time to the RTC (best-effort, non-blocking)."""
-        if self.rtc is None:
+        if self.rtc is None or not self._opt("write_rtc_when_synced", True):
             return
 
         def _later():
