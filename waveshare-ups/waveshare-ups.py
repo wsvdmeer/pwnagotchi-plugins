@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 
 import pwnagotchi.plugins as plugins
@@ -227,18 +228,23 @@ class BatteryGauge(Widget):
 
 class WaveshareUPS(plugins.Plugin):
     __author__ = "wsvdmeer"
-    __version__ = "1.1.0"
+    __version__ = "1.2.0"
     __license__ = "GPL3"
-    __description__ = "Battery gauge for the Waveshare UPS HAT (C): segmented battery icon, charging detection, self-healing I2C init."
+    __description__ = "Battery gauge for the Waveshare UPS HAT (C): segmented battery icon, charging detection, self-healing I2C init, self-driven refresh."
 
     def __init__(self):
         self.ina = None
         self.options = {}
         self._gauge = None
         self._use_icon = True
+        self._ui = None
         self._last_update = 0
         self._last_init_attempt = 0
+        self._last_text = None
         self._samples = []
+        self._lock = threading.Lock()
+        self._worker = None
+        self._running = False
 
     # ---- config helpers ---------------------------------------------------
 
@@ -326,58 +332,105 @@ class WaveshareUPS(plugins.Plugin):
                 ),
             )
 
-    def on_ui_update(self, ui):
-        now = time.time()
-        if now - self._last_update < int(self._opt("update_interval", 10)):
-            return
-        self._last_update = now
+        # With ui.fps = 0 the view only re-renders on other changes, so drive
+        # our own refresh: a background thread reads the battery and forces a
+        # redraw only when the displayed value actually changes.
+        self._ui = ui
+        if self._worker is None:
+            self._running = True
+            self._worker = threading.Thread(
+                target=self._refresh_loop, name="waveshare-ups", daemon=True
+            )
+            self._worker.start()
 
-        if self.ina is None and not self._try_init():
-            ui.set("ups", "--%")
-            return
-
-        try:
-            voltage = self._smoothed(self.ina.bus_voltage())
-            percent = self._voltage_to_percent(voltage)
-
-            charging = False
+    def _refresh_loop(self):
+        while self._running:
             try:
-                charging = self.ina.current_ma() > float(self._opt("charge_current_ma", 15))
-            except Exception:
-                pass  # current is a nice-to-have; never let it break the readout
+                if self._read_and_apply(self._ui) and self._ui is not None:
+                    # Force the e-ink refresh; only reached when the value moved.
+                    self._ui.update(force=True)
+            except Exception as e:
+                logging.debug("[waveshare-ups] refresh loop: %s", e)
+            # Sleep in 1s slices so unload/shutdown stays responsive.
+            for _ in range(max(1, int(self._opt("update_interval", 10)))):
+                if not self._running:
+                    break
+                time.sleep(1)
 
-            text = "{:d}%".format(percent)
-            if charging:
-                text += "+"
-            elif self._opt("show_voltage", False):
-                text = "{:.2f}V".format(voltage)
+    def on_ui_update(self, ui):
+        # Runs inside the normal render cycle (when other elements change).
+        # Rate-limited and idempotent; the background loop drives idle updates.
+        self._read_and_apply(ui)
 
-            if self._use_icon and self._gauge is not None:
+    def _read_and_apply(self, ui):
+        """Read the gauge and push the value into the UI element. Returns True
+        only when the displayed text changed (so the caller can force a redraw).
+        Rate-limited by ``update_interval`` and safe to call concurrently."""
+        if ui is None:
+            return False
+        with self._lock:
+            now = time.time()
+            if now - self._last_update < int(self._opt("update_interval", 10)):
+                return False
+            self._last_update = now
+
+            if self.ina is None and not self._try_init():
+                return self._apply_text(ui, "--%", None, None)
+
+            try:
+                voltage = self._smoothed(self.ina.bus_voltage())
+                percent = self._voltage_to_percent(voltage)
+
+                charging = False
+                try:
+                    charging = self.ina.current_ma() > float(
+                        self._opt("charge_current_ma", 15)
+                    )
+                except Exception:
+                    pass  # current is a nice-to-have; never break the readout
+
+                text = "{:d}%".format(percent)
+                if charging:
+                    text += "+"
+                elif self._opt("show_voltage", False):
+                    text = "{:.2f}V".format(voltage)
+
+                low = int(self._opt("low_battery", 10))
+                if (
+                    self._opt("shutdown_on_critical", False)
+                    and not charging
+                    and percent <= int(self._opt("critical_battery", 5))
+                ):
+                    logging.warning(
+                        "[waveshare-ups] battery critical (%d%%), shutting down", percent
+                    )
+                    import pwnagotchi
+
+                    pwnagotchi.shutdown()
+                elif percent <= low and not charging:
+                    logging.info("[waveshare-ups] battery low: %d%%", percent)
+
+                return self._apply_text(ui, text, percent, charging)
+
+            except Exception as e:
+                logging.error("[waveshare-ups] read error: %s", e)
+                self.ina = None  # force a re-init on the next cycle
+                return self._apply_text(ui, "--%", None, None)
+
+    def _apply_text(self, ui, text, percent, charging):
+        if self._use_icon and self._gauge is not None:
+            if percent is not None:
                 self._gauge.percent = percent
+            if charging is not None:
                 self._gauge.charging = charging
-            ui.set("ups", text)
-
-            low = int(self._opt("low_battery", 10))
-            if (
-                self._opt("shutdown_on_critical", False)
-                and not charging
-                and percent <= int(self._opt("critical_battery", 5))
-            ):
-                logging.warning(
-                    "[waveshare-ups] battery critical (%d%%), shutting down", percent
-                )
-                import pwnagotchi
-
-                pwnagotchi.shutdown()
-            elif percent <= low and not charging:
-                logging.info("[waveshare-ups] battery low: %d%%", percent)
-
-        except Exception as e:
-            logging.error("[waveshare-ups] read error: %s", e)
-            self.ina = None  # force a re-init on the next cycle
-            ui.set("ups", "--%")
+        ui.set("ups", text)
+        if text != self._last_text:
+            self._last_text = text
+            return True
+        return False
 
     def on_unload(self, ui):
+        self._running = False
         try:
             with ui._lock:
                 ui.remove_element("ups")

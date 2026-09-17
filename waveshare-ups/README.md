@@ -1,4 +1,4 @@
-# waveshare-ups (v1.1.0)
+# waveshare-ups (v1.2.0)
 
 Battery percentage display for the **Waveshare UPS HAT (C)** on Pwnagotchi, using
 the on-board INA219 fuel-gauge over I²C.
@@ -13,6 +13,7 @@ boot — so it doesn't get stuck showing `--%`.
 - **Segmented gauge**: the battery fills as discrete bars (3 by default) that render crisply on a 1-bit display, or a proportional fill if you prefer
 - **Smooth reading**: interpolated Li-ion discharge curve + rolling average, instead of coarse voltage steps that lurch between values
 - **Charging detection**: reads INA219 current; appends `+` while the pack is charging (positive current)
+- **Self-driven refresh**: a background thread refreshes the reading and forces a screen redraw **only when the value changes**, so the battery updates on its own even when `ui.fps = 0` (the default) leaves the rest of the screen static — without wasting e-ink refreshes
 - **Self-healing init**: if the I²C bus/device isn't ready when the plugin loads, it keeps retrying (rate-limited) rather than dying on the first failure
 - **Configurable**: I²C bus/address, icon style/orientation/segments, screen position, update interval, and thresholds
 - **Optional safe shutdown** at a critical charge level (opt-in, off by default)
