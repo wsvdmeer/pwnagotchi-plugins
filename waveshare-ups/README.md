@@ -9,8 +9,8 @@ boot — so it doesn't get stuck showing `--%`.
 
 ## Features
 
-- **Battery icon + %** on the e-ink screen: a compact upright (or horizontal) battery glyph sized to match the status-bar text height, next to the exact percentage
-- **Segmented gauge**: the battery fills as discrete bars (3 by default) that render crisply on a 1-bit display, or a proportional fill if you prefer
+- **Battery `BAT %`** on the e-ink screen by default — a plain, compact text readout
+- **Optional battery-icon variant** (`battery_icon = true`): a compact upright (or horizontal) battery glyph, sized to match the status-bar text height, drawn next to the percentage. As a **segmented gauge** it fills in discrete bars (3 by default) that render crisply on a 1-bit display, or a proportional fill (`segments = 1`)
 - **Smooth reading**: interpolated Li-ion discharge curve + rolling average, instead of coarse voltage steps that lurch between values
 - **Charging detection**: reads INA219 current; appends `+` while the pack is charging (positive current)
 - **Self-driven refresh**: a background thread refreshes the reading and forces a screen redraw **only when the value changes**, so the battery updates on its own even when `ui.fps = 0` (the default) leaves the rest of the screen static — without wasting e-ink refreshes
@@ -58,10 +58,10 @@ i2c_bus = 1
 i2c_address = "0x43"      # INA219 address; string ("0x43") or decimal (67)
 
 # Display
-battery_icon = true       # true: battery glyph; false: plain "BAT" text label
-orientation = "vertical"  # "vertical" (upright, compact) or "horizontal"
+battery_icon = false      # false (default): plain "BAT" text; true: battery glyph
+orientation = "vertical"  # "vertical" (upright, compact) or "horizontal" (icon only)
 segments = 3              # bars in the gauge (>1); set to 1 for a proportional fill
-label = "BAT"             # text label used only when battery_icon = false
+label = "BAT"             # text label shown when battery_icon = false (the default)
 # position = [130, 0]     # [x, y]; omit to auto-place (top, right of centre)
 update_interval = 10      # seconds between reads
 smoothing = 3             # rolling-average window over readings (1 = off)
@@ -84,12 +84,13 @@ shutdown_on_critical = false  # opt-in: safely power off at critical %
 
 - **`i2c_address`**: TOML has no hex literals, so pass the address as a string
   (`"0x43"`) or its decimal value (`67`).
-- **Icon appearance**: the glyph auto-sizes to the status-bar digit height, so
-  it lines up with the surrounding text. `orientation = "vertical"` is the
-  compact upright battery; `"horizontal"` draws a wider battery with a terminal
-  nub. `segments` controls how many discrete bars fill the gauge (`1` = smooth
-  proportional fill). Set `battery_icon = false` to fall back to a plain `BAT`
-  text label.
+- **Display variants**: by default (`battery_icon = false`) the plugin shows a
+  plain `BAT %` text readout. Set **`battery_icon = true`** for the graphical
+  battery glyph instead. The glyph auto-sizes to the status-bar digit height so
+  it lines up with the surrounding text: `orientation = "vertical"` is the
+  compact upright battery, `"horizontal"` draws a wider battery with a terminal
+  nub, and `segments` controls how many discrete bars fill it (`1` = smooth
+  proportional fill).
 - **Charging sign**: verified on real hardware — a *positive* INA219 current
   means the pack is charging (discharge reads negative, idle ≈ 0 mA). Near a
   full charge the current tapers to only a few tens of mA, which is why the

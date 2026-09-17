@@ -370,7 +370,7 @@ class WaveshareUPS(plugins.Plugin):
             pos = (ui.width() // 2 + 10, 0)
         pos = (int(pos[0]), int(pos[1]))
 
-        self._use_icon = bool(self._opt("battery_icon", True))
+        self._use_icon = bool(self._opt("battery_icon", False))
         if self._use_icon:
             self._gauge = BatteryGauge(
                 position=pos,
