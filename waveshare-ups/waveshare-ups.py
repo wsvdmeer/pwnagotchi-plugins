@@ -258,6 +258,15 @@ class WaveshareUPS(plugins.Plugin):
         self._hist_lock = threading.Lock()
         self._last_sample = 0
         self._last = {"percent": None, "voltage": None, "charging": False}
+        # runtime estimate + coulomb-counted capacity ("health")
+        self._draw_samples = []       # recent discharge |mA| for a stable average
+        self._energy = {
+            "last_ts": None,          # runtime only (not persisted)
+            "from_full": False,       # anchored at a full charge?
+            "start_pct": None,        # % at the last full anchor
+            "discharged_mah": 0.0,    # mAh drawn since the last full
+            "measured_capacity": None,  # usable mAh measured over a full->low run
+        }
 
     # ---- config helpers ---------------------------------------------------
 
@@ -356,12 +365,133 @@ class WaveshareUPS(plugins.Plugin):
             if len(self._history) > cap:
                 self._history = self._history[-cap:]
         self._persist_history()
+        self._persist_state()
+
+    # ---- runtime + capacity ("health") ------------------------------------
+    #
+    # The INA219 is only a volt/amp meter — it has no idea what the battery's
+    # capacity is. So we track it ourselves: coulomb-count the discharge and,
+    # over a clean full->low run, work out the real usable mAh and remember it.
+
+    def _state_file(self):
+        return self._opt("state_file", "/etc/pwnagotchi/waveshare-ups-state.json")
+
+    def _capacity_mah(self):
+        """Measured capacity wins once we have it; otherwise the configured
+        rating (a rough starting point)."""
+        m = self._energy.get("measured_capacity")
+        if m and m > 0:
+            return float(m)
+        return float(self._opt("battery_capacity_mah", 1000))
+
+    def _load_state(self):
+        try:
+            with open(self._state_file()) as fh:
+                d = json.load(fh)
+            if isinstance(d, dict):
+                for k in ("from_full", "start_pct", "discharged_mah", "measured_capacity"):
+                    if k in d:
+                        self._energy[k] = d[k]
+                logging.info(
+                    "[waveshare-ups] loaded energy state (measured capacity: %s mAh)",
+                    self._energy.get("measured_capacity"),
+                )
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            logging.debug("[waveshare-ups] could not load state: %s", e)
+
+    def _persist_state(self):
+        try:
+            path = self._state_file()
+            tmp = path + ".tmp"
+            snap = {k: self._energy.get(k) for k in
+                    ("from_full", "start_pct", "discharged_mah", "measured_capacity")}
+            with open(tmp, "w") as fh:
+                json.dump(snap, fh)
+            os.replace(tmp, path)
+        except Exception as e:
+            logging.debug("[waveshare-ups] could not persist state: %s", e)
+
+    def _update_energy(self, percent, current_ma):
+        """Coulomb-count discharge since the last full charge to measure the
+        real usable capacity. Only clean full->low runs (no intervening
+        charging) produce a measurement."""
+        now = time.time()
+        e = self._energy
+        last = e["last_ts"]
+        e["last_ts"] = now
+
+        # integrate charge drawn, but only across sane gaps (skip restarts)
+        if last is not None:
+            dt = now - last
+            max_dt = 4 * int(self._opt("update_interval", 10))
+            if 0 < dt <= max_dt and current_ma < 0:
+                e["discharged_mah"] += (-current_ma) * dt / 3600.0
+
+        full_at = int(self._opt("full_threshold", 99))
+        charge_thr = float(self._opt("charge_current_ma", 15))
+
+        # intervening charge (below full) invalidates the current measurement run
+        if current_ma > charge_thr and percent < full_at:
+            e["from_full"] = False
+
+        # anchor at a full charge
+        if percent >= full_at:
+            e["from_full"] = True
+            e["start_pct"] = percent
+            e["discharged_mah"] = 0.0
+
+        # complete a measurement once we've drained far enough from full
+        floor = int(self._opt("measure_floor", 12))
+        if e.get("from_full") and e.get("start_pct") and percent <= floor:
+            span = e["start_pct"] - percent
+            if span >= int(self._opt("measure_min_span", 60)) and e["discharged_mah"] > 0:
+                cap = e["discharged_mah"] / (span / 100.0)
+                e["measured_capacity"] = round(cap, 1)
+                e["from_full"] = False
+                logging.info(
+                    "[waveshare-ups] measured usable capacity ~%d mAh "
+                    "(%d%% -> %d%%, drew %.0f mAh)",
+                    cap, e["start_pct"], percent, e["discharged_mah"],
+                )
+                self._persist_state()
+
+    def _runtime_estimate(self, percent, charging, current_ma):
+        """Return (seconds, label). Discharging -> time remaining; charging ->
+        rough time to full (tapers near the top, so treat as approximate)."""
+        cap = self._capacity_mah()
+        if charging:
+            if current_ma > 10 and percent < 99:
+                secs = ((100 - percent) / 100.0) * cap / current_ma * 3600.0
+                return secs, "to full"
+            return None, "charging"
+        draw = -current_ma if current_ma < 0 else 0
+        if draw > 0:
+            self._draw_samples.append(draw)
+            win = max(1, int(self._opt("runtime_avg_window", 6)))
+            if len(self._draw_samples) > win:
+                self._draw_samples = self._draw_samples[-win:]
+        avg = (sum(self._draw_samples) / len(self._draw_samples)) if self._draw_samples else 0
+        if avg < 5:  # essentially idle -> no meaningful estimate
+            return None, "remaining"
+        secs = (percent / 100.0) * cap / avg * 3600.0
+        return secs, "remaining"
+
+    @staticmethod
+    def _fmt_dur(secs):
+        if secs is None:
+            return None
+        secs = int(secs)
+        h, m = secs // 3600, (secs % 3600) // 60
+        return "%dh %02dm" % (h, m) if h > 0 else "%dm" % m
 
     # ---- plugin lifecycle -------------------------------------------------
 
     def on_loaded(self):
         logging.info("[waveshare-ups] plugin loaded")
         self._load_history()
+        self._load_state()
         self._try_init()  # best-effort; on_ui_update retries if this fails
 
     def on_ui_setup(self, ui):
@@ -442,13 +572,12 @@ class WaveshareUPS(plugins.Plugin):
                 voltage = self._smoothed(self.ina.bus_voltage())
                 percent = self._voltage_to_percent(voltage)
 
-                charging = False
+                current_ma = 0.0
                 try:
-                    charging = self.ina.current_ma() > float(
-                        self._opt("charge_current_ma", 15)
-                    )
+                    current_ma = self.ina.current_ma()
                 except Exception:
                     pass  # current is a nice-to-have; never break the readout
+                charging = current_ma > float(self._opt("charge_current_ma", 15))
 
                 text = "{:d}%".format(percent)
                 if charging:
@@ -471,10 +600,21 @@ class WaveshareUPS(plugins.Plugin):
                 elif percent <= low and not charging:
                     logging.info("[waveshare-ups] battery low: %d%%", percent)
 
+                self._update_energy(percent, current_ma)
+                runtime_s, runtime_label = self._runtime_estimate(
+                    percent, charging, current_ma
+                )
                 self._last = {
                     "percent": percent,
                     "voltage": round(voltage, 3),
                     "charging": charging,
+                    "current_ma": round(current_ma, 1),
+                    "power_w": round(voltage * abs(current_ma) / 1000.0, 2),
+                    "runtime": self._fmt_dur(runtime_s),
+                    "runtime_label": runtime_label,
+                    "used_since_full_mah": round(self._energy.get("discharged_mah") or 0, 1),
+                    "measured_capacity_mah": self._energy.get("measured_capacity"),
+                    "capacity_mah": round(self._capacity_mah()),
                 }
                 self._record(percent, charging, voltage)
                 return self._apply_text(ui, text, percent, charging)
@@ -569,10 +709,15 @@ _WEB_PAGE = """
   <div class="sub">Waveshare UPS HAT (C) · plugin v{{ version }}</div>
   <div class="cards">
     <div class="card"><div class="k">Charge</div><div class="v" id="pct">–</div></div>
-    <div class="card"><div class="k">Voltage</div><div class="v" id="volt">–</div></div>
+    <div class="card"><div class="k">Runtime</div><div class="v" id="runtime">–</div></div>
     <div class="card"><div class="k">State</div><div class="v" id="state">–</div></div>
+    <div class="card"><div class="k">Voltage</div><div class="v" id="volt">–</div></div>
+    <div class="card"><div class="k">Draw</div><div class="v" id="draw">–</div></div>
+    <div class="card"><div class="k">Power</div><div class="v" id="power">–</div></div>
+    <div class="card"><div class="k" id="capk">Capacity</div><div class="v" id="cap">–</div></div>
     <div class="card"><div class="k">Window</div><div class="v" id="span">–</div></div>
   </div>
+  <div class="sub" id="note"></div>
   <div class="chartcard">
     <canvas id="c"></canvas>
     <div class="foot">
@@ -630,6 +775,25 @@ async function tick(){
       (cur.voltage==null?'–':cur.voltage.toFixed(2)+' V');
     document.getElementById('state').textContent =
       cur.charging ? 'Charging' : (cur.percent==null?'–':'Discharging');
+    document.getElementById('runtime').textContent =
+      cur.runtime ? cur.runtime : (cur.charging ? 'charging' : '–');
+    document.getElementById('draw').textContent =
+      (cur.current_ma==null) ? '–' : (Math.abs(cur.current_ma).toFixed(0)+' mA');
+    document.getElementById('power').textContent =
+      (cur.power_w==null) ? '–' : (cur.power_w.toFixed(2)+' W');
+    if(cur.measured_capacity_mah){
+      document.getElementById('capk').textContent = 'Capacity (measured)';
+      document.getElementById('cap').textContent = Math.round(cur.measured_capacity_mah)+' mAh';
+      document.getElementById('note').textContent =
+        'Capacity measured over a full→low discharge. Used since full: '+
+        (cur.used_since_full_mah==null?'–':Math.round(cur.used_since_full_mah)+' mAh')+'.';
+    } else {
+      document.getElementById('capk').textContent = 'Capacity (est.)';
+      document.getElementById('cap').textContent = (cur.capacity_mah||'–')+' mAh';
+      document.getElementById('note').textContent =
+        'Capacity is a configured estimate; it self-measures over a full→low discharge. Used since full: '+
+        (cur.used_since_full_mah==null?'–':Math.round(cur.used_since_full_mah)+' mAh')+'.';
+    }
     document.getElementById('span').textContent =
       s.length>1 ? fmtAge(s[s.length-1][0]-s[0][0]) : '–';
     draw(s);

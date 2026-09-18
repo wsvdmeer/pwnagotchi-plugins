@@ -68,7 +68,7 @@ Battery gauge for the **Waveshare UPS HAT (C)**, reading the on-board INA219 fue
 - 🔋 **Battery icon + %** on the e-ink screen (compact segmented battery glyph, or plain `BAT` text)
 - ⚡ **Charging detection** — shows a `+` when the pack is charging
 - 📈 **Smoothed reading** via an interpolated Li-ion curve, instead of coarse voltage steps
-- 📊 **Web history chart** at `/plugins/waveshare-ups` — charge % over time, persisted across reboots
+- 📊 **Web dashboard** at `/plugins/waveshare-ups` — charge history chart, live draw/power, **estimated runtime**, and a **self-measured capacity** ("health") via coulomb-counting
 - 🩹 **Self-healing I²C init** — retries if the HAT isn't ready at boot instead of getting stuck on `--%`
 - 🛠️ **Configurable** icon style, orientation, segments, position, and thresholds (optional safe shutdown)
 

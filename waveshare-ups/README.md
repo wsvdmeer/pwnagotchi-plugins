@@ -16,6 +16,7 @@ boot — so it doesn't get stuck showing `--%`.
 - **Self-driven refresh**: a background thread refreshes the reading and forces a screen redraw **only when the value changes**, so the battery updates on its own even when `ui.fps = 0` (the default) leaves the rest of the screen static — without wasting e-ink refreshes
 - **Self-healing init**: if the I²C bus/device isn't ready when the plugin loads, it keeps retrying (rate-limited) rather than dying on the first failure
 - **Web history chart**: a page at `/plugins/waveshare-ups` plots charge % over time (discharging vs charging), backed by a small persisted ring buffer that survives reboots
+- **Runtime estimate + self-measured capacity**: shows estimated time remaining, live draw (mA / W), and — since the INA219 can't read the battery's capacity — **coulomb-counts a full→low discharge to measure the real usable mAh** ("health"), persisted across reboots
 - **Configurable**: I²C bus/address, icon style/orientation/segments, screen position, update interval, thresholds, and history sampling
 - **Optional safe shutdown** at a critical charge level (opt-in, off by default)
 - **Well-behaved**: does not force the pwnagotchi face expression
@@ -73,6 +74,14 @@ history_interval = 300    # seconds between recorded samples (default 5 min)
 history_max = 288         # samples to keep (288 × 5 min ≈ 24 h)
 # history_file = "/etc/pwnagotchi/waveshare-ups-history.json"  # persistence path
 
+# Runtime / capacity ("health")
+battery_capacity_mah = 1000  # rough starting estimate; auto-refined by measurement
+runtime_avg_window = 6       # readings averaged for a stable runtime estimate
+# full_threshold = 99        # % that counts as "full" (anchors a measurement)
+# measure_floor = 12         # % to drain to before recording a measurement
+# measure_min_span = 60      # min % drained (full→low) for a valid measurement
+# state_file = "/etc/pwnagotchi/waveshare-ups-state.json"  # capacity persistence
+
 # Charging / thresholds
 charge_current_ma = 15    # current above this (mA) counts as "charging"
 low_battery = 10          # log a warning at/below this %
@@ -116,13 +125,31 @@ especially under heavy recon load.
 ## Web interface
 
 Open **`http://<pwnagotchi-ip>:8080/plugins/waveshare-ups`** for a battery
-history chart: charge % over time, with charging stretches drawn in green and
-discharging in blue, plus the current charge, voltage, and state. The page
-auto-refreshes every 30 s and reads from `GET /plugins/waveshare-ups/data`
-(JSON), which you can also poll from your own tooling.
+dashboard: a charge-%-over-time chart (charging stretches in green, discharging
+in blue) plus stat cards for charge, **estimated runtime**, state, voltage,
+**live draw (mA) and power (W)**, and **capacity**. The page auto-refreshes
+every 30 s and reads from `GET /plugins/waveshare-ups/data` (JSON), which you
+can also poll from your own tooling.
 
 History is sampled every `history_interval` seconds, capped at `history_max`
 samples, and persisted to `history_file` so it survives reboots.
+
+### Runtime & capacity ("health")
+
+The INA219 is only a volt/amp meter — it has **no idea what the battery's
+capacity is**, so the plugin tracks it itself:
+
+- **Runtime** = remaining charge ÷ the recent average discharge current. It only
+  shows a figure while actually running on battery (a draw > ~5 mA); on external
+  power the draw is ≈ 0, so it reads `–`.
+- **Capacity** starts from `battery_capacity_mah` (a rough guess) and is shown as
+  *(est.)*. Once the pack discharges cleanly from full down past `measure_floor`
+  (no charging in between), the plugin **coulomb-counts the drawn mAh and reports
+  the real usable capacity** *(measured)*, which then drives the runtime estimate.
+  This value is persisted to `state_file`, so it's remembered across reboots.
+
+So: to get a measured capacity and a good runtime estimate, let it run on
+battery through (roughly) a full-to-low discharge once.
 
 ## Troubleshooting
 
