@@ -76,21 +76,6 @@ Battery gauge for the **Waveshare UPS HAT (C)**, reading the on-board INA219 fue
 
 ---
 
-### 🛰️ rtc-sync
-
-Keeps the system clock correct across reboots using a hardware **DS3231 / DS1307 RTC** — no kernel overlay or `hwclock` needed.
-
-- 🕓 **Restores the clock from the RTC at boot** (so time is right even offline)
-- 💾 **Persists good system time back to the RTC** and clears the DS3231 oscillator-stopped flag
-- 🔗 **Tether-aware** — re-syncs the RTC shortly after `bt-tether` brings the network up (NTP)
-- 🌍 Stores **UTC** on the chip, timezone-independent
-
-**[📖 Full documentation →](rtc-sync/README.md)**
-
-> Pairs with `rtc-datetime` (which *displays* the clock) — this one keeps the underlying clock accurate.
-
----
-
 ## 🚀 Quick Start
 
 For any plugin, copy to your custom plugins directory and enable in config:
