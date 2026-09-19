@@ -692,9 +692,11 @@ _WEB_PAGE = """
   .sub { color:var(--muted); font-size:12px; margin-bottom:16px; }
   .cards { display:flex; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
   .card { background:var(--card); border:1px solid var(--border); border-radius:12px;
-          padding:12px 16px; flex:1; min-width:120px; }
+          padding:12px 16px; flex:1; min-width:130px; }
   .k { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }
-  .v { font-size:24px; font-weight:650; margin-top:2px; }
+  .v { font-size:20px; font-weight:650; margin-top:2px; white-space:nowrap; }
+  /* text-ish values (words) get a smaller size so they fit the card */
+  #state, #runtime, #cap { font-size:16px; }
   .chartcard { background:var(--card); border:1px solid var(--border);
                border-radius:12px; padding:12px; }
   canvas { width:100%; height:260px; display:block; }
@@ -705,8 +707,8 @@ _WEB_PAGE = """
 </head>
 <body>
 <div class="wrap">
-  <h1>🔋 UPS Battery</h1>
-  <div class="sub">Waveshare UPS HAT (C) · plugin v{{ version }}</div>
+  <h1>UPS Battery</h1>
+  <div class="sub">Waveshare UPS HAT (C) · plugin v{{ version }} · by wsvdmeer</div>
   <div class="cards">
     <div class="card"><div class="k">Charge</div><div class="v" id="pct">–</div></div>
     <div class="card"><div class="k">Runtime</div><div class="v" id="runtime">–</div></div>
